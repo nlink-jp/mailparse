@@ -357,3 +357,23 @@ func TestDecompressRTFBounds(t *testing.T) {
 		t.Fatalf("%v %+v", m.Warnings, m.Bodies)
 	}
 }
+
+// Nested \field groups grow the reader's field slice while an outer field
+// holds instruction text; the text must survive the slice being copied (a
+// strings.Builder kept by value panicked here — found by FuzzRTF).
+func TestRTFNestedFieldsGrowTheStack(t *testing.T) {
+	var b strings.Builder
+	b.WriteString(`{\rtf1\ansi `)
+	for range 40 {
+		// \u120? writes "x" into the field at once, before the next one opens.
+		b.WriteString(`{\field{\*\fldinst HYPERLINK "http://x.example/\u120?" `)
+	}
+	for range 40 {
+		b.WriteString(`}{\fldrslt y}}`)
+	}
+	b.WriteString(`}`)
+	_, text, _, _ := extractRTF([]byte(b.String()))
+	if !strings.Contains(text, "http://x.example/") {
+		t.Fatalf("text %q", text)
+	}
+}

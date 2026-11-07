@@ -246,8 +246,10 @@ type rtfGroup struct {
 // text is — \'hh by code page, \uN as Unicode — so the target reported is the
 // one Word would open.
 type rtfField struct {
-	depth  int // stack depth of the \field group
-	inst   strings.Builder
+	depth int // stack depth of the \field group
+	// inst is a byte slice, not a strings.Builder: fields live by value in a
+	// slice that append may copy, and a copied Builder panics on its next write.
+	inst   []byte
 	pend   []byte
 	pendCP uint32
 }
@@ -597,7 +599,7 @@ const maxFieldInst = 4096
 // capture adds a byte of \fldinst text to the innermost open field.
 func (r *rtfReader) capture(c byte, cp uint32) {
 	f := &r.fields[len(r.fields)-1]
-	if f.inst.Len()+len(f.pend) >= maxFieldInst {
+	if len(f.inst)+len(f.pend) >= maxFieldInst {
 		return
 	}
 	if len(f.pend) > 0 && cp != f.pendCP {
@@ -611,7 +613,7 @@ func (r *rtfReader) capture(c byte, cp uint32) {
 func (r *rtfReader) captureUnicode(n int) {
 	f := &r.fields[len(r.fields)-1]
 	r.flushField(f)
-	if f.inst.Len() >= maxFieldInst {
+	if len(f.inst) >= maxFieldInst {
 		return
 	}
 	if n < 0 {
@@ -622,7 +624,7 @@ func (r *rtfReader) captureUnicode(n int) {
 		v = utf8.RuneError // pairs are not needed in a link target; reported as a bad escape
 		r.badUnicode = true
 	}
-	f.inst.WriteRune(v)
+	f.inst = utf8.AppendRune(f.inst, v)
 }
 
 func (r *rtfReader) flushField(f *rtfField) {
@@ -633,7 +635,7 @@ func (r *rtfReader) flushField(f *rtfField) {
 	if bad && r.badCP == 0 {
 		r.badCP = f.pendCP
 	}
-	f.inst.WriteString(s)
+	f.inst = append(f.inst, s...)
 	f.pend = f.pend[:0]
 }
 
@@ -641,7 +643,7 @@ func (r *rtfReader) flushField(f *rtfField) {
 func (r *rtfReader) closeField(visible bool) {
 	f := &r.fields[len(r.fields)-1]
 	r.flushField(f)
-	inst := f.inst.String()
+	inst := string(f.inst)
 	r.fields = r.fields[:len(r.fields)-1]
 	if target := hyperlinkTarget(inst); target != "" && visible {
 		r.text(" <" + target + ">")
