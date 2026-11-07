@@ -64,6 +64,9 @@ value kept.
 
 `ParseEML`, `ParseMSG` and `ParseTNEF` read one format without detection.
 
+Leaves to the consumer: the meaning of Received or Authentication-Results, URL extraction, attachment type
+detection, hashing.
+
 ## Package cfb
 
 `github.com/nlink-jp/mailparse/cfb` reads Compound File Binary files (MS-CFB) — the container of `.msg` and of
@@ -77,9 +80,6 @@ for _, e := range f.Root.Children { /* storages and streams, in directory order 
 data, err := f.ReadStream(f.Root.Child("WordDocument"))
 ```
 
-Leaves to the consumer: the meaning of Received or Authentication-Results, URL extraction, attachment type
-detection, hashing.
-
 ## Limits (Options, defaults)
 
 | Option | Default |
@@ -88,7 +88,7 @@ detection, hashing.
 | `MaxMessageDepth` | 3 nested layers |
 | `MaxMIMEDepth` | 32 |
 | `MaxParts` | 1,000 across every layer |
-| `MaxDecoded` | 120 MiB across every layer |
+| `MaxDecoded` | 120 MiB across every layer (Base64 and QP, .msg streams, expanded RTF, TNEF values) |
 | `MaxHeaders` / `MaxHeaderBytes` | 2,000 / 1 MiB per header block |
 
 ## Dependencies

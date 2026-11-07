@@ -60,6 +60,8 @@ winmail.dat（TNEF。たいてい `application/ms-tnef` の添付で、形式 `t
 
 `ParseEML`・`ParseMSG`・`ParseTNEF` は、判別をせずにその形式として読みます。
 
+使う側に任せる: Received や Authentication-Results の意味、URL の取り出し、添付の種類の判別、ハッシュの計算。
+
 ## cfb パッケージ
 
 `github.com/nlink-jp/mailparse/cfb` は Compound File Binary（MS-CFB）— `.msg` と旧形式の Office 文書の入れ物 —
@@ -73,8 +75,6 @@ for _, e := range f.Root.Children { /* ストレージとストリームをデ�
 data, err := f.ReadStream(f.Root.Child("WordDocument"))
 ```
 
-使う側に任せる: Received や Authentication-Results の意味、URL の取り出し、添付の種類の判別、ハッシュの計算。
-
 ## 上限（Options の既定値）
 
 | 項目 | 既定 |
@@ -83,7 +83,7 @@ data, err := f.ReadStream(f.Root.Child("WordDocument"))
 | `MaxMessageDepth` | 入れ子 3 層 |
 | `MaxMIMEDepth` | 32 |
 | `MaxParts` | 全層で 1,000 |
-| `MaxDecoded` | 全層で 120 MiB |
+| `MaxDecoded` | 全層で 120 MiB（Base64・QP、.msg のストリーム、展開した RTF、TNEF の値を含む） |
 | `MaxHeaders` / `MaxHeaderBytes` | ヘッダのまとまりごとに 2,000 / 1 MiB |
 
 ## 依存
