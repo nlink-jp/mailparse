@@ -92,6 +92,24 @@ winmail.dat（TNEF。たいてい `application/ms-tnef` の添付で、形式 `t
   アドレスは解析済みの `From`・`To` などから読んでください。
 - **テキストの添付:** 本文になるのは text/plain と text/html だけです。text/calendar の招待や text/csv は、宣言
   された `Charset` を持つ添付になり、`Attachment.Text()` で本文と同じ規則で UTF-8 に直せます。
+- **添付の `MediaType` はメールが宣言した型です。** .msg や TNEF の添付は `PidTagAttachMimeTag` で宣言しますが、
+  Outlook はいつも書くとは限りません。無ければ、データのある添付は `application/octet-stream`（実物の .msg で
+  `.doc` がそうでした）、埋め込みメッセージは `application/vnd.ms-outlook`（TNEF では `application/vnd.ms-tnef`）、参照や OLE の添付（バイト列が無い）は
+  空です。
+  `Filename` やバイト列から型を決めるのは使う側です。`.ics` の招待が `application/octet-stream` で来ることもあり、
+  `Text()` はそれでも読めます。
+- **壊れたアドレスの欄でもアドレスを残します。** `ceo@example.com attacker@evil.example`（カンマが無い）や
+  `CEO <ceo@example.com> attacker@evil.example` はメールボックス 2 つになり、`invalid_address` の警告が付きます。
+  正しい name-addr と同じく `<...>` の前の文字列は表示名なので、`ceo@example.com <attacker@evil.example>` の
+  最初のアドレスは名前です（攻撃者の文字列で、使う側は `@` の有無で確かめられます）。こうした欄からアドレスと
+  して返すのは、書かれたままで addr-spec の形をしたものだけです: 引用の外の `@` が 1 つ、その前が atext と
+  ドット（日本の携帯キャリアが発行した `taro.@docomo.ne.jp` のような旧い形を含む）か 1 つの引用文字列、後ろが
+  dot-atom か IP リテラル、空白（引用した局所部の外）・制御文字・書式文字を含まない（どの部分も欄に書かれた語
+  そのもの）。アドレスを複数持つ `<...>` はそれぞれを返し（名前は最初のものに）、`<...>` の中の Exchange の DN
+  （`/O=EXCHANGE/OU=... (FYDIBOHF23SPDLT)/CN=...`）は書かれたまま残します。全角空白と NBSP も空白と同じく
+  アドレスを区切ります。隣がドット・`@`・端のコメントは取り除き（`corp(x).example` は `corp.example`）、語と語の
+  間にあればその連なりはアドレスにしないので、`co(x)rp.example` が書かれていない `corp.example` になることは
+  ありません。コメントの中の `@` は数えません。形に合わないものは `Raw` にだけ残ります。
 - **入れ子のメール:** `Walk` はメールと入れ子のメールを、その位置（"2>1"）とともにたどります。`AllWarnings` は
   すべての警告を、絶対の `Part` で返します。
 - **本文の出どころ:** `Body.Origin` — `mime`、`mapi`（.msg や TNEF の本文のプロパティ）、`rtf`（圧縮 RTF。.msg

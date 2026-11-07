@@ -96,6 +96,24 @@ detection, hashing.
   `From`, `To` and the other parsed lists.
 - **Text attachments**: only text/plain and text/html are bodies. A text/calendar invitation or text/csv is an
   attachment with its declared `Charset`; `Attachment.Text()` converts it with the rules bodies use.
+- **An attachment's `MediaType` is what the message declares.** A `.msg` or TNEF attachment declares it in
+  `PidTagAttachMimeTag`, which Outlook does not always write; without it, an attachment with data is
+  `application/octet-stream` (a real `.msg` measured had a `.doc` this way), an embedded message is
+  `application/vnd.ms-outlook` (`application/vnd.ms-tnef` in TNEF), and a reference or OLE attachment (no bytes)
+  has an empty type. Deciding a type from `Filename` or the bytes is yours: a `.ics` invitation can come as
+  `application/octet-stream`, and `Text()` reads it all the same.
+- **A malformed address field keeps its addresses**: `ceo@example.com attacker@evil.example` (comma missing)
+  or `CEO <ceo@example.com> attacker@evil.example` gives two mailboxes, with an `invalid_address` warning. As in a
+  well-formed name-addr, text before `<...>` is the display name, so in `ceo@example.com <attacker@evil.example>`
+  the first address is the name — attacker text a consumer can check for an `@`. What such a field yields as an
+  address is held to an addr-spec as written: one `@` outside quotes; before it atext and dots (the obsolete forms
+  Japanese mobile carriers issued, such as `taro.@docomo.ne.jp`, included) or one quoted-string; after it a
+  dot-atom or IP literal; no whitespace (outside a quoted local part), control or format character — every part a
+  whole word written in the field. A `<...>` holding several addresses gives each (the name goes to the first); an
+  Exchange DN in `<...>` (`/O=EXCHANGE/OU=... (FYDIBOHF23SPDLT)/CN=...`) is kept exactly as written. An ideographic
+  space or NBSP separates addresses like a space. A comment beside a dot, an `@` or the edge is dropped
+  (`corp(x).example` is `corp.example`); between two words the run is no address, so `co(x)rp.example` is never a
+  made-up `corp.example`, and an `@` inside a comment never counts. What fits nothing stays in `Raw` only.
 - **Nested messages**: `Walk` visits the message and every nested one with its path ("2>1"); `AllWarnings` returns all
   warnings with absolute `Part` paths.
 - **Where a body came from**: `Body.Origin` — `mime`, `mapi` (a .msg/TNEF body property), `rtf` (compressed RTF,

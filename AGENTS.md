@@ -30,7 +30,8 @@ doc.go        Package documentation
 mailparse.go  Format, errors, Options and defaults, Message types, Parse / ParseBytes / ParseEML
 detect.go     Positive recognition: CFB + MSG stream names, TNEF signature, an EML header block
 header.go     Lenient header reader (order, duplicates, raw + decoded, limits); RFC 2047 with repair
-address.go    Address lists: net/mail AddressParser first (decodes the phrase after tokenizing), lenient fallback
+address.go    Address lists: net/mail AddressParser first (decodes the phrase after tokenizing); display names
+lenient.go    The lenient fallback for fields net/mail refuses: RFC 5322 lexer + small grammar, one output contract
 entity.go     parseEML, identity fields, the MIME walk, own multipart splitter, nested messages, the shared budget
 transfer.go   Base64 / quoted-printable that keep what decodes and warn about damage
 charset.go    Declared charset, HTML <meta charset> (x/net/html tokenizer), Japanese guessing, strict decoding
@@ -80,6 +81,11 @@ docs/{en,ja}/ RFP and the Phase 0 record
   strings use attOemCodepage (MS-OXTNEF 2.3.3.2).
 - **Detect needs a mail-only field, or a From with an address among mail-like field names** (no `_`, not all
   lowercase). Requiring a Date rejected minimal script mail (second review); keep both directions tested.
+- **The lenient address reader is a lexer and a grammar, held to the contract at the top of lenient.go**
+  (an Address is a run of tokens that is an addr-spec as written; every part is a whole word of the field).
+  Never find structure by searching the string or cut an address out by byte position: six review rounds of
+  such repairs each let other text through (2026-11-07). `TestLenientContract` checks the contract on random input
+  — extend the contract and the test together.
 - **Address fields are tokenized on the raw bytes; only display names are converted from 8-bit afterwards** — a
   Shift_JIS trail byte 0x5C converted first swallows a quoted-string escape and injects a mailbox.
 - **The independent pre-release review found ~45 issues** (all fixed, see CHANGELOG Security): rerun one before

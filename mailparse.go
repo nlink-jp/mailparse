@@ -283,6 +283,13 @@ type Body struct {
 }
 
 // Attachment is one non-body part. Data holds its decoded bytes (a copy).
+//
+// MediaType is the type the message declares: the Content-Type of a MIME part,
+// or PidTagAttachMimeTag of a .msg/TNEF attachment, which Outlook does not
+// always write — then an attachment with data is application/octet-stream, an
+// embedded message application/vnd.ms-outlook (application/vnd.ms-tnef in
+// TNEF), and a reference or OLE
+// attachment "". Deciding a type from Filename or Data belongs to the consumer.
 type Attachment struct {
 	Filename    string `json:"filename,omitempty"`
 	MediaType   string `json:"media_type"`

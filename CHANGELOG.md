@@ -4,6 +4,60 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- **The lenient address reader is rewritten as a lexer and a small grammar.**
+  It reads the address fields net/mail refuses. It used to find structure by
+  searching a masked copy of the string and cut addresses out by byte position,
+  trimming and dropping comments to fit; with no grammar and no stated output,
+  each repair let other text through. An independent review over six rounds
+  found, among others, an address in a malformed From vanishing (a missing
+  comma), a comment's domain becoming the address's
+  (`ceo@corp.example(@evil.example)`), two words glued into a domain that was
+  not written (`co(x)rp.example` → `corp.example`), a quoted display name read
+  as an address after 16 unclosed `(`, and an underscore dropped from an
+  address. The field is now cut into RFC 5322 tokens once (`lenient.go`), and
+  the output is held to one contract, checked by a property test on random
+  hostile input:
+  - an Address is a run of tokens that is an addr-spec as written — words and
+    dots with at least one word (the obsolete forms Japanese carriers issued,
+    `taro.@docomo.ne.jp`, included) or one quoted-string, `@`, then words
+    joined by single dots or an IP literal; no control or format character, and
+    no whitespace outside a quoted local part; a comment only beside a dot, the `@` or the edge, and never part of
+    the Address. Every part is a whole word written in the field.
+  - Each `<...>` gives its addresses, the text before it as the first one's
+    name (a bare address there is display text, as in a name-addr); every
+    other addr-spec in the item, separated by whitespace — the ideographic
+    space and NBSP included — is a mailbox of its own, so
+    `ceo@example.com attacker@evil.example`,
+    `CEO <ceo@example.com> attacker@evil.example` and
+    `CEO <ceo@example.com attacker@evil.example>` each give two.
+  - An Exchange DN in `<...>` is kept exactly as written, parentheses
+    included; nothing with an `@`, a control or a format character is. What
+    fits nothing stays in `Raw` only, with the field's `invalid_address`
+    warning.
+  - Raw 8-bit bytes in an address are replaced, never guessed as Japanese
+    (Shift_JIS 0x81 0x40 would take the `@`).
+- **Unclosed parentheses in an address field no longer cost quadratic time.**
+  The old masker called itself again after every delimiter that never closed:
+  200,000 `(` in a From took a minute, and the recursion had no depth bound.
+  The lexer computes where each quoted-string and comment closes beforehand;
+  a test compares its quoted-strings and comments with the old masker's on
+  random input (domain literals, which the old masker did not know, aside).
+- **Compressed RTF with nested `\field` groups no longer panics.** An open
+  field kept its instruction text in a `strings.Builder` held by value in a
+  slice; when a nested field grew the slice, the copied Builder panicked on its
+  next write (a crafted .msg could stop the consumer). Found by `FuzzRTF`; the
+  failing input is kept as a fuzz seed.
+
+### Documentation
+
+- `Attachment.MediaType` is the declared type; what a `.msg`/TNEF attachment
+  without `PidTagAttachMimeTag` gets, and that deciding a type from the name or
+  the bytes is the consumer's (README, both languages; the type's comment).
+
 ## [0.2.0] - 2026-11-07
 
 From moving the organization's four mail tools onto mailparse (issues #1–#10)
