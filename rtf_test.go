@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -108,8 +109,9 @@ func TestRTFEncapsulation(t *testing.T) {
 		`{\rtf1\ansi\ansicpg1252\fromhtml1 \deff0{\fonttbl}`: rtfHTML,
 		`{\rtf1\ansi\fromtext \deff0`:                        rtfText,
 		`{\rtf1\ansi\deff0 hello \fromhtml1`:                 rtfPlain, // text before it
-		`{\rtf1\a\b\c\d\e\f\g\h\i\j\fromhtml1`:               rtfPlain, // past 10 tokens
-		`{\rtf0\fromhtml1`:                                   rtfPlain,
+		`{\rtf1\a\b\c\d\e\f\g\h\i\j\fromhtml1`:               rtfHTML,  // past 10 tokens, as Outlook may (Appendix A note 14)
+		`{\rtf0\fromhtml1`:                                   rtfHTML,  // without \rtf1, as Outlook does (note 13)
+		`{\rtf1{\fonttbl{\f0 Arial;}}\fromhtml1`:             rtfPlain, // text came first
 		`plain text`:                                         rtfPlain,
 	}
 	for in, want := range cases {
@@ -208,7 +210,8 @@ func TestRTFPlainAndText(t *testing.T) {
 	}
 	enc := `{\rtf1\ansi\ansicpg1252\fromtext \deff0{\fonttbl{\f0\fswiss Arial;}}\htmlrtf{\*\x hidden}suppressed\htmlrtf0 line1\par line2}`
 	kind, text, _, _ = extractRTF([]byte(enc))
-	if kind != rtfText || text != "line1\r\nline2" {
+	// \htmlrtf is an HTML-encapsulation rule; text encapsulation shows the text.
+	if kind != rtfText || text != "suppressedline1\r\nline2" {
 		t.Fatalf("fromtext: %d %q", kind, text)
 	}
 }
@@ -257,6 +260,7 @@ func FuzzRTF(f *testing.F) {
 	f.Add(compressLiteral([]byte(`{\rtf1\ansi\deff0{\fonttbl{\f0 Arial;}}\pard Hello\parስ4?{\*\x}\bin3 abc}`)))
 	vec, _ := hex.DecodeString("2d0000002b0000004c5a4675f1c5c7a703000a00726370673132354232" + "0af32068656c090020627705b06c647d0a800fa0")
 	f.Add(vec)
+	f.Add(compressLiteral([]byte(`{\rtf1 ` + strings.Repeat("{", 3000) + `{\field{\*\fldinst HYPERLINK "http://x.example/"}{\fldrslt y}}`)))
 	f.Fuzz(func(t *testing.T, b []byte) {
 		r, err := decompressRTF(b, 1<<20)
 		if err != nil {
@@ -270,4 +274,104 @@ func FuzzRTF(f *testing.F) {
 			t.Fatalf("%d bytes of RTF gave %d bytes of text", len(r.data), len(text))
 		}
 	})
+}
+
+func TestRTFReviewFindings(t *testing.T) {
+	text := func(in string) rtfExtract { return extractRTFFull([]byte(in)) }
+	t.Run("deep groups stay bounded", func(t *testing.T) {
+		x := text(`{\rtf1 ` + strings.Repeat("{", 200000) + "a" + strings.Repeat("}", 200000) + "b}")
+		if !x.tooDeep || x.text != "ab" {
+			t.Fatalf("%v %q", x.tooDeep, x.text)
+		}
+	})
+	t.Run("hyperlink target in plain RTF", func(t *testing.T) {
+		x := text(`{\rtf1\ansi {\field{\*\fldinst HYPERLINK "http://evil.example/p" \o "tip"}{\fldrslt click}} after}`)
+		if x.text != "click <http://evil.example/p> after" {
+			t.Fatalf("%q", x.text)
+		}
+		x = text(`{\rtf1 {\field{\*\fldinst{HYPERLINK \\l "anchor" http://a.example/}}{\fldrslt here}}}`)
+		if x.text != "here <http://a.example/>" {
+			t.Fatalf("switch: %q", x.text)
+		}
+		x = text(`{\rtf1 {\field{\*\fldinst PAGE}{\fldrslt 3}}}`)
+		if x.text != "3" {
+			t.Fatalf("non-link field: %q", x.text)
+		}
+	})
+	t.Run("htmltag outside encapsulated HTML is skipped", func(t *testing.T) {
+		for _, in := range []string{
+			`{\rtf0 a{\*\htmltag <a href="http://evil.example/">}b}`,
+			`{\rtf1\fromtext a{\*\htmltag <a href="http://evil.example/">}b}`,
+		} {
+			if x := text(in); x.text != "ab" {
+				t.Errorf("%s: %q", in, x.text)
+			}
+		}
+	})
+	t.Run("htmltag inside a skipped destination is skipped", func(t *testing.T) {
+		x := text(`{\rtf1\fromhtml1 {\*\generator{\*\htmltag <a href="http://inj.example/">}}{\info{\*\htmltag <b>}}{\*\htmltag <p>}}`)
+		if x.text != "<p>" {
+			t.Fatalf("%q", x.text)
+		}
+	})
+	t.Run("table cells are separated", func(t *testing.T) {
+		if x := text(`{\rtf1 http://a.example\cell b.example\cell\row}`); x.text != "http://a.example\tb.example\t\r\n" {
+			t.Fatalf("%q", x.text)
+		}
+	})
+	t.Run("over-long control words are consumed", func(t *testing.T) {
+		x := text(`{\rtf1 ` + `\` + strings.Repeat("a", 40) + ` evil.example \f0000000000000000065 x}`)
+		if x.text != "evil.example x" {
+			t.Fatalf("%q", x.text)
+		}
+	})
+	t.Run("unicode escapes out of range or unpaired", func(t *testing.T) {
+		x := text(`{\rtf1 h\u967412?tp a\u-10179?b \u-8704?c}`)
+		if x.text != "h\uFFFDtp a\uFFFDb \uFFFDc" || !x.badUnicode {
+			t.Fatalf("%q %v", x.text, x.badUnicode)
+		}
+	})
+	t.Run("7-bit code pages are decoded", func(t *testing.T) {
+		// こんにちは in ISO-2022-JP, as \'hh escapes under \ansicpg50220.
+		jis := "\x1b$B$3$s$K$A$O\x1b(B"
+		var esc strings.Builder
+		for _, c := range []byte(jis) {
+			fmt.Fprintf(&esc, `\'%02x`, c)
+		}
+		if x := text(`{\rtf1\ansi\ansicpg50220 ` + esc.String() + `}`); x.text != "こんにちは" {
+			t.Fatalf("%q", x.text)
+		}
+	})
+	t.Run("one bad byte does not spoil the run", func(t *testing.T) {
+		x := text(`{\rtf1\ansi\ansicpg932 \'82\'a0\'82\'a2\'82}`)
+		if !strings.HasPrefix(x.text, "あい") || x.badCP != 932 {
+			t.Fatalf("%q %d", x.text, x.badCP)
+		}
+	})
+}
+
+func TestDecompressRTFBounds(t *testing.T) {
+	raw := []byte(`{\rtf1 http://beyond-rawsize.example/}`)
+	b := compressLiteral(raw)
+	binary.LittleEndian.PutUint32(b[4:], 10) // RAWSIZE smaller than the data
+	r, err := decompressRTF(b, 1<<20)
+	if err != nil || !r.over || string(r.data) != string(raw) {
+		t.Fatalf("%v %+v %q", err, r.over, r.data)
+	}
+	if r, _ := decompressRTF(b, 20); len(r.data) != 20 {
+		t.Fatalf("budget not applied past RAWSIZE: %d", len(r.data))
+	}
+	big := compressLiteral(raw)
+	binary.LittleEndian.PutUint32(big[4:], 100<<20)
+	if r, _ := decompressRTF(big, 200<<20); cap(r.data) > 64<<10 {
+		t.Fatalf("reserved %d bytes from RAWSIZE", cap(r.data))
+	}
+	mela := rtfHeader(raw, 100<<20, rtfUncompressed, 0)
+	if _, err := decompressRTF(mela, 1<<20); !errors.Is(err, errRTFTooLarge) {
+		t.Fatalf("uncompressed over budget: %v", err)
+	}
+	m, _ := ParseBytes(buildMSG([]mapi{{pidSubject, "x"}, {pidRTFCompressed, b}}), Options{})
+	if codes(m.Warnings)[WarnRTFDamaged] != 1 || !strings.Contains(m.Bodies[0].Content, "beyond-rawsize") {
+		t.Fatalf("%v %+v", m.Warnings, m.Bodies)
+	}
 }

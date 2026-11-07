@@ -39,11 +39,14 @@ type rtfResult struct {
 	crcOK     bool
 	truncated bool // the input ended early or the output is shorter than RAWSIZE
 	short     bool // the stream holds fewer bytes than COMPSIZE says
+	over      bool // the data runs past RAWSIZE; what follows was kept, up to the budget
 }
 
 // decompressRTF expands a PidTagRtfCompressed value. maxOut bounds the output:
-// a RAWSIZE above it is refused before anything is expanded. A CRC mismatch
-// is reported but the output is kept (it is evidence).
+// a RAWSIZE above it is refused before anything is expanded, and data running
+// past RAWSIZE is kept only up to it. A CRC mismatch is reported but the output
+// is kept (it is evidence). The output grows as it is produced; nothing is
+// reserved from the declared RAWSIZE.
 func decompressRTF(b []byte, maxOut int64) (rtfResult, error) {
 	var r rtfResult
 	if len(b) < 16 {
@@ -58,25 +61,25 @@ func decompressRTF(b []byte, maxOut int64) (rtfResult, error) {
 		end, r.short = int64(len(b)), true
 	}
 	in := b[16:max(end, 16)]
-	switch compType {
-	case rtfUncompressed:
-		r.data = bytes.Clone(in[:min(int64(len(in)), rawSize, maxOut)])
-		r.crcOK = true // MS-OXRTFCP: the CRC field is not used for uncompressed data
-		r.truncated = int64(len(r.data)) < rawSize
-		return r, nil
-	case rtfCompressed:
-	default:
+	if compType != rtfUncompressed && compType != rtfCompressed {
 		return r, errRTFType
 	}
 	if rawSize > maxOut {
 		return r, errRTFTooLarge
+	}
+	if compType == rtfUncompressed {
+		r.data = bytes.Clone(in[:min(int64(len(in)), maxOut)])
+		r.crcOK = true // MS-OXRTFCP: the CRC field is not used for uncompressed data
+		r.truncated = int64(len(r.data)) < rawSize
+		r.over = int64(len(r.data)) > rawSize
+		return r, nil
 	}
 	r.crcOK = rtfCRC(in) == crc
 
 	var dict [4096]byte
 	copy(dict[:], rtfDictionaryInit)
 	wp := len(rtfDictionaryInit)
-	out := make([]byte, 0, rawSize)
+	out := make([]byte, 0, min(rawSize, 64<<10))
 	i := 0
 	for {
 		if i >= len(in) {
@@ -93,7 +96,7 @@ func decompressRTF(b []byte, maxOut int64) (rtfResult, error) {
 				}
 				c := in[i]
 				i++
-				if int64(len(out)) < rawSize {
+				if int64(len(out)) < maxOut {
 					out = append(out, c)
 				}
 				dict[wp] = c
@@ -112,7 +115,7 @@ func decompressRTF(b []byte, maxOut int64) (rtfResult, error) {
 			}
 			for k := range n {
 				c := dict[(off+k)%len(dict)]
-				if int64(len(out)) < rawSize {
+				if int64(len(out)) < maxOut {
 					out = append(out, c)
 				}
 				dict[wp] = c
@@ -125,6 +128,7 @@ done:
 	if int64(len(out)) < rawSize {
 		r.truncated = true
 	}
+	r.over = int64(len(out)) > rawSize
 	return r, nil
 }
 
@@ -148,14 +152,17 @@ const (
 	rtfText                 // \fromtext: plain text encapsulated by Outlook
 )
 
-// rtfEncapsulation inspects the first 10 tokens (MS-OXRTFEX 2.2.3.1). Only
-// group marks and control words may come before \fromhtml or \fromtext.
+// rtfEncapsulation looks for \fromhtml or \fromtext among the group marks and
+// control words that open the document (MS-OXRTFEX 2.2.3.1). It reads as
+// Outlook does (Appendix A, notes 13 and 14): without requiring \rtf1, and past
+// the 10 tokens the specification recommends — up to the first text, at most
+// 256 tokens — so a message Outlook de-encapsulates is not read as plain RTF.
 func rtfEncapsulation(b []byte) rtfKind {
-	if !bytes.HasPrefix(b, []byte(`{\rtf1`)) {
+	if !bytes.HasPrefix(b, []byte(`{`)) {
 		return rtfPlain
 	}
 	i := 0
-	for tokens := 0; tokens < 10 && i < len(b); tokens++ {
+	for tokens := 0; tokens < 256 && i < len(b); tokens++ {
 		for i < len(b) && (b[i] == '\r' || b[i] == '\n') {
 			i++
 		}
@@ -202,7 +209,7 @@ var rtfDestinations = map[string]bool{
 	"footer": true, "footerl": true, "footerr": true, "footerf": true,
 	"listtable": true, "listoverridetable": true, "revtbl": true, "rsidtbl": true,
 	"generator": true, "xmlnstbl": true, "themedata": true, "colorschememapping": true,
-	"latentstyles": true, "datastore": true, "filetbl": true, "fldinst": true,
+	"latentstyles": true, "datastore": true, "filetbl": true,
 	"bkmkstart": true, "bkmkend": true, "mmathPr": true, "userprops": true,
 	"docvar": true, "private": true, "objdata": true,
 }
@@ -213,7 +220,14 @@ var rtfSymbols = map[string]string{
 	"par": "\r\n", "line": "\r\n", "tab": "\t",
 	"lquote": "\u2018", "rquote": "\u2019", "ldblquote": "\u201C", "rdblquote": "\u201D",
 	"bullet": "\u2022", "endash": "\u2013", "emdash": "\u2014",
+	// Table and page breaks separate text that would otherwise run together
+	// (a URL followed by the next cell would read as one longer host).
+	"cell": "\t", "row": "\r\n", "page": "\r\n", "sect": "\r\n",
 }
+
+// maxRTFDepth bounds the group stack. Deeper groups are counted, not stacked,
+// so memory stays bounded however many "{" an attacker writes.
+const maxRTFDepth = 1024
 
 type rtfGroup struct {
 	skip     bool // a destination producing no text, or an ignorable \* group
@@ -224,26 +238,57 @@ type rtfGroup struct {
 	uc       int // fallback characters after \uN
 	first    bool
 	starred  bool
-	fontSeen int // the font being defined inside the font table
+	fontSeen int  // the font being defined inside the font table
+	capture  bool // inside \fldinst: text is the field instruction, collected for HYPERLINK
+}
+
+// rtfField is an open \field group.
+type rtfField struct {
+	depth int    // stack depth of the \field group
+	inst  []byte // the \fldinst text
 }
 
 // rtfReader turns RTF into text, keeping track of code pages.
 type rtfReader struct {
-	kind      rtfKind
-	defaultCP uint32
-	fontCP    map[int]uint32
-	out       strings.Builder
-	pending   []byte
-	pendingCP uint32
-	skipFall  int    // fallback characters still to drop after \uN
-	highSurr  rune   // a UTF-16 high surrogate from \uN waiting for its pair
-	badCP     uint32 // a code page that could not decode (0 if none)
+	kind       rtfKind
+	defaultCP  uint32
+	fontCP     map[int]uint32
+	out        strings.Builder
+	pending    []byte
+	pendingCP  uint32
+	skipFall   int    // fallback characters still to drop after \uN
+	highSurr   rune   // a UTF-16 high surrogate from \uN waiting for its pair
+	badCP      uint32 // a code page that could not decode (0 if none)
+	deep       int    // groups opened past maxRTFDepth and not yet closed
+	tooDeep    bool   // the depth limit was reached
+	badUnicode bool   // a \uN escape was out of range or an unpaired surrogate
+	fields     []rtfField
+}
+
+// rtfExtract is what extractRTFFull read.
+type rtfExtract struct {
+	kind       rtfKind
+	text       string
+	charset    string
+	badCP      uint32
+	tooDeep    bool
+	badUnicode bool
 }
 
 // extractRTF returns the text an RTF document carries: the encapsulated HTML
 // or plain text, or the visible text of ordinary RTF. The charset named is the
 // document's default code page.
 func extractRTF(b []byte) (kind rtfKind, text, charset string, badCP uint32) {
+	x := extractRTFFull(b)
+	return x.kind, x.text, x.charset, x.badCP
+}
+
+// extractRTFFull is extractRTF with everything it met. In ordinary and
+// \fromtext RTF, a HYPERLINK field is written as its visible text followed by
+// " <target>", the way Outlook renders such links as plain text, so the target
+// is not lost. Hidden text (\v) is kept: for a reader looking for links, an
+// over-report is safer than a gap.
+func extractRTFFull(b []byte) rtfExtract {
 	r := &rtfReader{kind: rtfEncapsulation(b), defaultCP: 1252, fontCP: map[int]uint32{}}
 	stack := []rtfGroup{{uc: 1}}
 	cur := func() *rtfGroup { return &stack[len(stack)-1] }
@@ -258,7 +303,7 @@ func extractRTF(b []byte) (kind rtfKind, text, charset string, badCP uint32) {
 		if g.skip || g.fonttbl {
 			return false
 		}
-		if r.kind != rtfPlain && g.htmlrtf {
+		if r.kind == rtfHTML && g.htmlrtf {
 			return false
 		}
 		return true
@@ -280,17 +325,29 @@ func extractRTF(b []byte) (kind rtfKind, text, charset string, badCP uint32) {
 		switch c {
 		case '{':
 			i++
+			r.skipFall = 0
+			if len(stack) >= maxRTFDepth {
+				r.deep++
+				r.tooDeep = true
+				continue
+			}
 			g := *cur()
 			g.first, g.starred = true, false
 			stack = append(stack, g)
-			r.skipFall = 0
 			continue
 		case '}':
 			i++
+			r.skipFall = 0
+			if r.deep > 0 {
+				r.deep--
+				continue
+			}
 			if len(stack) > 1 {
+				if n := len(r.fields); n > 0 && r.fields[n-1].depth == len(stack) {
+					r.closeField(visibleText())
+				}
 				stack = stack[:len(stack)-1]
 			}
-			r.skipFall = 0
 			continue
 		case '\r', '\n':
 			i++
@@ -305,7 +362,9 @@ func extractRTF(b []byte) (kind rtfKind, text, charset string, badCP uint32) {
 				continue
 			}
 			cur().first = false
-			if visibleText() {
+			if cur().capture {
+				r.capture(c)
+			} else if visibleText() {
 				r.byte(c, cp())
 			}
 			continue
@@ -331,7 +390,9 @@ func extractRTF(b []byte) (kind rtfKind, text, charset string, badCP uint32) {
 							continue
 						}
 						g.first = false
-						if visibleText() {
+						if g.capture {
+							r.capture(byte(v))
+						} else if visibleText() {
 							r.byte(byte(v), cp())
 						}
 						continue
@@ -340,7 +401,12 @@ func extractRTF(b []byte) (kind rtfKind, text, charset string, badCP uint32) {
 				continue
 			case '{', '}', '\\':
 				g.first = false
-				if !r.dropFallback() && visibleText() {
+				if r.dropFallback() {
+					continue
+				}
+				if g.capture {
+					r.capture(n)
+				} else if visibleText() {
 					r.byte(n, cp())
 				}
 				continue
@@ -360,22 +426,30 @@ func extractRTF(b []byte) (kind rtfKind, text, charset string, badCP uint32) {
 			g.first = false
 			continue
 		}
+		// A control word runs to the first non-letter and its parameter to the
+		// first non-digit, however long: an over-long word or parameter is
+		// consumed (and ignored), never leaked as text.
 		j := i + 1
-		for j < len(b) && j-i <= 32 && isLetter(b[j]) {
+		for j < len(b) && isLetter(b[j]) {
 			j++
 		}
 		word := string(b[i+1 : j])
+		if len(word) > 32 {
+			word = ""
+		}
 		param, hasParam := 0, false
 		k := j
 		if k < len(b) && b[k] == '-' {
 			k++
 		}
-		for k < len(b) && k-j <= 11 && isDigit(b[k]) {
+		for k < len(b) && isDigit(b[k]) {
 			k++
 		}
 		if k > j && isDigit(b[k-1]) {
-			if v, err := strconv.Atoi(string(b[j:k])); err == nil {
-				param, hasParam = v, true
+			if k-j <= 11 {
+				if v, err := strconv.Atoi(string(b[j:k])); err == nil {
+					param, hasParam = v, true
+				}
 			}
 			j = k
 		}
@@ -443,8 +517,23 @@ func extractRTF(b []byte) (kind rtfKind, text, charset string, badCP uint32) {
 			g.htmlrtf = !hasParam || param != 0
 			continue
 		case "htmltag":
-			if first && starred && r.kind == rtfHTML {
-				g.htmltag, g.skip = true, false
+			// HTMLTAG content is copied only in encapsulated HTML, and not from
+			// inside a destination that is skipped as a whole.
+			if first && starred && r.kind == rtfHTML && !g.skip && !g.fonttbl {
+				g.htmltag = true
+			} else if first {
+				g.skip = true
+			}
+			continue
+		case "field":
+			if first && r.kind != rtfHTML && len(r.fields) < maxRTFDepth {
+				r.fields = append(r.fields, rtfField{depth: len(stack)})
+			}
+			continue
+		case "fldinst":
+			if first {
+				g.skip = true
+				g.capture = len(r.fields) > 0 && r.fields[len(r.fields)-1].depth < len(stack)
 			}
 			continue
 		case "fonttbl":
@@ -465,12 +554,66 @@ func extractRTF(b []byte) (kind rtfKind, text, charset string, badCP uint32) {
 			r.text(s)
 		}
 	}
+	r.flushSurrogate()
 	r.flush()
-	charset = codePageCharset(r.defaultCP)
+	charset := codePageCharset(r.defaultCP)
 	if charset == "" {
 		charset = "cp" + strconv.FormatUint(uint64(r.defaultCP), 10)
 	}
-	return r.kind, r.out.String(), charset, r.badCP
+	return rtfExtract{kind: r.kind, text: r.out.String(), charset: charset, badCP: r.badCP, tooDeep: r.tooDeep, badUnicode: r.badUnicode}
+}
+
+// capture adds a byte of \fldinst text to the innermost open field.
+func (r *rtfReader) capture(c byte) {
+	f := &r.fields[len(r.fields)-1]
+	if len(f.inst) < 4096 {
+		f.inst = append(f.inst, c)
+	}
+}
+
+// closeField ends the innermost field and, for a HYPERLINK, writes its target.
+func (r *rtfReader) closeField(visible bool) {
+	f := r.fields[len(r.fields)-1]
+	r.fields = r.fields[:len(r.fields)-1]
+	if target := hyperlinkTarget(string(f.inst)); target != "" && visible {
+		r.text(" <" + target + ">")
+	}
+}
+
+// hyperlinkTarget reads the target of a HYPERLINK field instruction:
+// HYPERLINK "target" or HYPERLINK target, with switches (\l, \o, ...) skipped.
+func hyperlinkTarget(inst string) string {
+	f := strings.Fields(inst)
+	if len(f) < 2 || !strings.EqualFold(f[0], "HYPERLINK") {
+		return ""
+	}
+	rest := strings.TrimSpace(inst[strings.Index(strings.ToUpper(inst), "HYPERLINK")+len("HYPERLINK"):])
+	for rest != "" {
+		if strings.HasPrefix(rest, `\`) { // a switch, and its argument when quoted
+			sw := rest
+			if sp := strings.IndexAny(sw, " \t"); sp >= 0 {
+				rest = strings.TrimSpace(sw[sp:])
+			} else {
+				return ""
+			}
+			if strings.HasPrefix(rest, `"`) {
+				if e := strings.Index(rest[1:], `"`); e >= 0 {
+					rest = strings.TrimSpace(rest[e+2:])
+				} else {
+					return ""
+				}
+			}
+			continue
+		}
+		if strings.HasPrefix(rest, `"`) {
+			if e := strings.Index(rest[1:], `"`); e >= 0 {
+				return rest[1 : e+1]
+			}
+			return rest[1:]
+		}
+		return strings.Fields(rest)[0]
+	}
+	return ""
 }
 
 // dropFallback consumes one fallback character after \uN.
@@ -483,6 +626,7 @@ func (r *rtfReader) dropFallback() bool {
 }
 
 func (r *rtfReader) byte(c byte, cp uint32) {
+	r.flushSurrogate()
 	if len(r.pending) > 0 && cp != r.pendingCP {
 		r.flush()
 	}
@@ -491,28 +635,66 @@ func (r *rtfReader) byte(c byte, cp uint32) {
 }
 
 func (r *rtfReader) text(s string) {
+	r.flushSurrogate()
 	r.flush()
 	r.out.WriteString(s)
 }
 
+// flushSurrogate writes a high surrogate that found no low one as U+FFFD.
+func (r *rtfReader) flushSurrogate() {
+	if r.highSurr != 0 {
+		r.highSurr = 0
+		r.badUnicode = true
+		r.flush()
+		r.out.WriteRune(utf8.RuneError)
+	}
+}
+
+// unicode writes a \uN character: N is a signed 16-bit value; one out of that
+// range, or an unpaired surrogate, becomes U+FFFD and is reported.
 func (r *rtfReader) unicode(n int) {
+	if n < -32768 || n > 65535 {
+		r.flushSurrogate()
+		r.badUnicode = true
+		r.text(string(utf8.RuneError))
+		return
+	}
 	if n < 0 {
 		n += 65536
 	}
 	v := rune(n)
 	if utf16.IsSurrogate(v) {
 		if v < 0xDC00 {
+			r.flushSurrogate()
 			r.highSurr = v
 			return
 		}
-		if r.highSurr != 0 {
-			v = utf16.DecodeRune(r.highSurr, v)
-			r.highSurr = 0
-		} else {
-			v = utf8.RuneError
+		if r.highSurr == 0 {
+			r.badUnicode = true
+			r.text(string(utf8.RuneError))
+			return
 		}
+		v = utf16.DecodeRune(r.highSurr, v)
+		r.highSurr = 0
 	}
 	r.text(string(v))
+}
+
+// noteBadCP records the first code page whose bytes did not decode.
+func (r *rtfReader) noteBadCP() {
+	if r.badCP == 0 {
+		r.badCP = r.pendingCP
+	}
+}
+
+// asciiCompatible reports whether ASCII bytes stand for themselves in a code
+// page — not so for ISO-2022-JP (escape sequences) or UTF-16.
+func asciiCompatible(cp uint32) bool {
+	switch codePageCharset(cp) {
+	case "iso-2022-jp", "utf-16le", "utf-16be":
+		return false
+	}
+	return true
 }
 
 // flush decodes the pending bytes with their code page.
@@ -522,7 +704,7 @@ func (r *rtfReader) flush() {
 	}
 	b := r.pending
 	r.pending = r.pending[:0]
-	if isASCII(b) {
+	if isASCII(b) && asciiCompatible(r.pendingCP) {
 		r.out.Write(b)
 		return
 	}
@@ -533,11 +715,15 @@ func (r *rtfReader) flush() {
 				r.out.WriteString(s)
 				return
 			}
+			r.noteBadCP()
+			// Replace only the bytes that do not decode, not the whole run.
+			if s, err := enc.NewDecoder().Bytes(b); err == nil {
+				r.out.Write(s)
+				return
+			}
 		}
 	}
-	if r.badCP == 0 {
-		r.badCP = r.pendingCP
-	}
+	r.noteBadCP()
 	r.out.WriteString(strings.ToValidUTF8(string(b), "\uFFFD"))
 }
 
@@ -561,18 +747,27 @@ func (st *state) rtfBody(m *Message, comp []byte, part string, warn func(Warning
 	if res.truncated || res.short {
 		warn(Warning{Code: WarnRTFDamaged, Detail: fmt.Sprintf("compressed RTF ended early; %d bytes were expanded", len(res.data)), Part: part})
 	}
+	if res.over {
+		warn(Warning{Code: WarnRTFDamaged, Detail: fmt.Sprintf("compressed RTF expands past its RAWSIZE of %d bytes; the %d bytes produced were kept", binary.LittleEndian.Uint32(comp[4:]), len(res.data)), Part: part})
+	}
 	data := st.budgeted(res.data, part, warn)
 	if !bytes.HasPrefix(data, []byte(`{\rtf`)) {
 		warn(Warning{Code: WarnRTFDamaged, Detail: "expanded RTF does not start with {\\rtf; it was not read as RTF", Part: part})
 		return
 	}
-	kind, text, charset, bad := extractRTF(data)
-	if bad != 0 {
-		warn(Warning{Code: WarnUndecodableText, Detail: fmt.Sprintf("RTF text in code page %d did not decode; invalid bytes were replaced", bad), Part: part})
+	x := extractRTFFull(data)
+	if x.badCP != 0 {
+		warn(Warning{Code: WarnUndecodableText, Detail: fmt.Sprintf("RTF text in code page %d did not decode; invalid bytes were replaced", x.badCP), Part: part})
+	}
+	if x.badUnicode {
+		warn(Warning{Code: WarnUndecodableText, Detail: "RTF held a \\u escape out of range or an unpaired surrogate; it was replaced", Part: part})
+	}
+	if x.tooDeep {
+		warn(Warning{Code: WarnRTFDamaged, Detail: fmt.Sprintf("RTF groups nested deeper than %d; the deeper ones were read with the formatting of that depth", maxRTFDepth), Part: part})
 	}
 	mt := "text/plain"
-	if kind == rtfHTML {
+	if x.kind == rtfHTML {
 		mt = "text/html"
 	}
-	m.Bodies = append(m.Bodies, Body{MediaType: mt, Content: text, Charset: charset, CharsetSource: "rtf", Size: len(data), Part: part})
+	m.Bodies = append(m.Bodies, Body{MediaType: mt, Content: x.text, Charset: x.charset, CharsetSource: "rtf", Size: len(data), Part: part})
 }
