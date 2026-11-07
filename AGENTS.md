@@ -10,7 +10,7 @@ Module path: `github.com/nlink-jp/mailparse`. Design authority:
 [docs/ja/mailparse-rfp.ja.md](docs/ja/mailparse-rfp.ja.md) (English beside it); the comparison with the three
 existing util-series parsers and the measured defects: [docs/ja/mailparse-phase0.ja.md](docs/ja/mailparse-phase0.ja.md).
 
-**Status: v0.2.0. The API is v0.x until its consumers (mail-dissect, the four util-series mail tools) settle it.**
+**Status: v0.3.0. The API is v0.x until its consumers (mail-dissect, the four util-series mail tools) settle it.**
 
 ## Build / test
 
