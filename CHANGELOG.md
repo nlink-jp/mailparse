@@ -19,6 +19,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   for undeclared Japanese; nested messages (message/rfc822 and messages
   recognized by content); limits shared across one parse; a Warning for every
   repair, guess, skip or cut; a fuzz target.
+- Package `cfb`: Compound File Binary (MS-CFB) read from the specification,
+  replacing the community mscfb the existing tools used; loops in FAT, DIFAT,
+  mini-FAT and directory trees, out-of-range sectors and oversized stream claims
+  are cut and reported.
+- `.msg` reading (MS-OXMSG): transport headers, or identity fields from MAPI
+  properties with a `no_transport_headers` warning; text and HTML bodies;
+  attachments with bytes; embedded messages (also inside an .eml); 8-bit strings
+  by code page, including ISO-2022-JP (50220-50222) and EUC-JP (51932);
+  `ParseMSG`.
 
 ### Fixed
 

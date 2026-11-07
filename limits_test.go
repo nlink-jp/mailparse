@@ -39,8 +39,10 @@ func TestDetectMSGAndTNEF(t *testing.T) {
 	if Detect(msg) != FormatMSG {
 		t.Error("CFB with MSG stream names is a .msg")
 	}
-	if _, err := ParseBytes(msg, Options{}); !errors.Is(err, ErrUnsupported) {
-		t.Errorf("err = %v; .msg is not supported in this phase", err)
+	// Recognized by its names but not a readable compound file: refused, not
+	// read as something else.
+	if _, err := ParseBytes(msg, Options{}); !errors.Is(err, ErrNotMessage) {
+		t.Errorf("err = %v; a .msg whose compound file does not open is not a message", err)
 	}
 	if Detect([]byte{0x78, 0x9F, 0x3E, 0x22, 1, 0}) != FormatTNEF {
 		t.Error("the TNEF signature is TNEF")
@@ -194,6 +196,7 @@ func FuzzParseBytes(f *testing.F) {
 	}
 	f.Add([]byte(multipartOf(3)))
 	f.Add([]byte(nest(hdr+"\r\nx", 4)))
+	f.Add(sampleMSG())
 	opt := Options{MaxSize: 1 << 20, MaxParts: 200, MaxDecoded: 1 << 20, MaxHeaders: 200, MaxHeaderBytes: 64 << 10}
 	f.Fuzz(func(t *testing.T, b []byte) {
 		m, err := ParseBytes(b, opt)

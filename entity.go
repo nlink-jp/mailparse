@@ -127,14 +127,7 @@ func (st *state) entity(m *Message, h Header, body []byte, p string, mimeDepth, 
 	att := st.attachment(h, mediaType, disp, filename, data, p)
 	// A message attached under another type (application/octet-stream, a .eml
 	// or .msg name) is recognized by content and opened.
-	switch f := Detect(data); f {
-	case FormatEML:
-		if mediaType == "application/octet-stream" || mediaType == "text/plain" || hasMessageExt(filename) || strings.HasPrefix(mediaType, "message/") {
-			att.Message = st.nested(data, f, msgDepth, p, warn)
-		}
-	case FormatMSG, FormatTNEF:
-		att.Message = st.nested(data, f, msgDepth, p, warn)
-	}
+	att.Message = st.openByContent(data, mediaType, filename, msgDepth, p, warn)
 	m.Attachments = append(m.Attachments, att)
 	return node
 }
@@ -308,6 +301,13 @@ func (st *state) nested(data []byte, f Format, msgDepth int, p string, warn func
 	switch f {
 	case FormatEML:
 		return st.parseEML(data, msgDepth+1)
+	case FormatMSG:
+		m, err := st.parseMSG(data, msgDepth+1)
+		if err != nil {
+			warn(Warning{Code: WarnNestedUnreadable, Detail: "an attached .msg could not be read: " + err.Error(), Part: p})
+			return nil
+		}
+		return m
 	default:
 		warn(Warning{Code: WarnNestedUnsupported, Detail: "a nested " + string(f) + " was not opened (not supported yet)", Part: p})
 		return nil

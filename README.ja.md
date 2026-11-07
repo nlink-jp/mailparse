@@ -14,7 +14,8 @@
 - **上限**（大きさ・入れ子・パーツ数・デコード後の大きさ）は、入れ子のメールも含めた 1 回の解析で共有します。
   入力で panic しないことは、ファジングで確かめています。
 
-> 状態: 開発中（v0.x、未リリース）。`.eml` に対応。`.msg` と winmail.dat（TNEF）は次の段階で入ります。
+> 状態: 開発中（v0.x、未リリース）。`.eml` と Outlook の `.msg` に対応。圧縮 RTF と winmail.dat（TNEF）は
+> 作業中です。
 
 [English README](README.md)
 
@@ -41,8 +42,27 @@ for _, w := range m.Warnings { /* 解析中に起きたこと */ }
 ## 読むもの・使う側に任せるもの
 
 読む: ヘッダ（生の値と復号した値）、アドレス、MIME の木、RFC 2047 / 2231、転送エンコーディング、文字コード（宣言、
-HTML の `<meta charset>`、宣言の無い日本語の推定）、入れ子のメール（message/rfc822 と中身で判別したもの）、
-添付のバイト列。
+HTML の `<meta charset>`、宣言の無い日本語の推定）、入れ子のメール（message/rfc822、.msg の埋め込みメッセージ、
+中身で判別したもの）、添付のバイト列。
+
+`.msg` からは: Outlook が残したインターネットヘッダ（`PR_TRANSPORT_MESSAGE_HEADERS`）。無ければ差出人・宛先・
+件名・日付を MAPI のプロパティから取り、`no_transport_headers` の警告を付けます（そのメールには Received が
+ありません）。持っている本文はすべて（テキストと HTML — 攻撃者は食い違わせられます）、添付とそのバイト列、
+埋め込みメッセージ。8 ビットの文字列はメールのコードページで復号し、ISO-2022-JP（50220〜50222）と EUC-JP
+（51932）も含みます。Exchange の `/O=...` 形式のアドレスは `Raw` に残します。
+
+## cfb パッケージ
+
+`github.com/nlink-jp/mailparse/cfb` は Compound File Binary（MS-CFB）— `.msg` と旧形式の Office 文書の入れ物 —
+を読みます。Office 文書の中（マクロの格納場所など）を見たい利用者が、コミュニティ製の依存なしで使えるよう公開
+しています。セクタの鎖やディレクトリの木の循環、範囲外のセクタ、実際より大きいストリームの申告は打ち切って
+報告します（`Issues`、`ErrTruncated`）。処理量は入力の大きさにほぼ比例します。
+
+```go
+f, err := cfb.Open(r, cfb.Limits{}) // 既定は MaxSize 64 MiB、MaxEntries 4,096
+for _, e := range f.Root.Children { /* ストレージとストリームをディレクトリの順に */ }
+data, err := f.ReadStream(f.Root.Child("WordDocument"))
+```
 
 使う側に任せる: Received や Authentication-Results の意味、URL の取り出し、添付の種類の判別、ハッシュの計算。
 

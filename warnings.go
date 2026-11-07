@@ -30,6 +30,13 @@ const (
 	WarnCharsetMismatch     = "charset_mismatch"          // the declared charset did not fit the bytes; the charset was guessed
 	WarnCharsetGuessed      = "charset_guessed"           // no charset was declared for non-ASCII text; it was guessed
 	WarnUndecodableText     = "undecodable_text"          // text could not be decoded by any candidate; invalid bytes were replaced
+
+	// .msg and TNEF.
+	WarnCFBDamaged             = "cfb_damaged"              // the compound file structure was damaged (a loop, an out-of-range sector, a short stream); what was readable was kept
+	WarnMSGStructure           = "msg_structure"            // a .msg storage lacked a stream the format requires, or a property stream was cut
+	WarnNoTransportHeaders     = "no_transport_headers"     // a .msg had no internet headers; identity fields came from MAPI properties
+	WarnAttachmentNotExtracted = "attachment_not_extracted" // an attachment held no bytes to extract (OLE storage, a reference to a file)
+	WarnNestedUnreadable       = "nested_unreadable"        // an attached message was recognized but could not be read; it stays an attachment
 )
 
 // Warning is one thing a parse met and handled.

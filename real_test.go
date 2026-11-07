@@ -1,6 +1,7 @@
 package mailparse
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -8,8 +9,9 @@ import (
 	"testing"
 )
 
-// TestRealMessages parses a directory of real messages kept outside the
-// repository (MAILPARSE_REAL_DIR, searched recursively for .eml and .msg). It
+// TestRealMessages parses real messages kept outside the repository:
+// MAILPARSE_REAL_DIR names one file, or a directory searched recursively for
+// .eml, .msg and .dat (TNEF). It
 // skips when the variable is unset. It prints only counts and warning codes —
 // never content, addresses or subjects — so its log can be shared.
 func TestRealMessages(t *testing.T) {
@@ -18,10 +20,13 @@ func TestRealMessages(t *testing.T) {
 		t.Skip("MAILPARSE_REAL_DIR not set")
 	}
 	var files []string
+	if fi, err := os.Stat(dir); err == nil && !fi.IsDir() {
+		files = []string{dir}
+	}
 	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
-		if err == nil && !d.IsDir() {
+		if err == nil && !d.IsDir() && p != dir {
 			switch strings.ToLower(filepath.Ext(p)) {
-			case ".eml", ".msg":
+			case ".eml", ".msg", ".dat":
 				files = append(files, p)
 			}
 		}
@@ -51,8 +56,29 @@ func TestRealMessages(t *testing.T) {
 				nested++
 			}
 		}
-		t.Logf("#%02d %s: header %d, from %d, received %d, auth-results %d, bodies %d, attachments %d (nested %d), date ok %v, warnings %v",
-			i+1, m.Format, len(m.Header), len(m.From), len(m.Header.All("Received")), len(m.Header.All("Authentication-Results")),
-			len(m.Bodies), len(m.Attachments), nested, !m.Date.IsZero(), codes)
+		var bodies []string
+		for _, b := range m.Bodies {
+			bodies = append(bodies, fmt.Sprintf("%s %s %s/%s %d", b.Part, b.MediaType, b.Charset, b.CharsetSource, len(b.Content)))
+		}
+		withData := 0
+		for _, a := range m.Attachments {
+			if len(a.Data) > 0 {
+				withData++
+			}
+		}
+		t.Logf("#%02d %s: header %d, from %d (addr %v), to %d, received %d, auth-results %d, subject %v, message-id %v, bodies %v, attachments %d (with bytes %d, nested %d), date ok %v, warnings %v",
+			i+1, m.Format, len(m.Header), len(m.From), hasAddress(m.From), len(m.To), len(m.Header.All("Received")), len(m.Header.All("Authentication-Results")),
+			m.Subject != "", m.MessageID != "", bodies, len(m.Attachments), withData, nested, !m.Date.IsZero(), codes)
 	}
+}
+
+func hasAddress(ls []AddressList) bool {
+	for _, l := range ls {
+		for _, mb := range l.Mailboxes {
+			if mb.Address != "" {
+				return true
+			}
+		}
+	}
+	return false
 }

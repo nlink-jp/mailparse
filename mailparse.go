@@ -3,6 +3,7 @@ package mailparse
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"time"
 )
@@ -22,7 +23,7 @@ const (
 var (
 	ErrTooLarge    = errors.New("mailparse: input is larger than Options.MaxSize")
 	ErrNotMessage  = errors.New("mailparse: input is not a recognized message")
-	ErrUnsupported = errors.New("mailparse: .msg and TNEF are not supported yet")
+	ErrUnsupported = errors.New("mailparse: TNEF is not supported yet")
 )
 
 // Default limits (the RFP §2 table).
@@ -123,11 +124,15 @@ type Body struct {
 	Content   string `json:"content"`
 	Charset   string `json:"charset"`
 	// CharsetSource says how Charset was decided: "mime" (the Content-Type
-	// parameter), "meta" (HTML <meta>), "default" (US-ASCII by RFC 2045), or
+	// parameter), "meta" (HTML <meta>), "codepage" (a .msg code page),
+	// "unicode" (a .msg Unicode property), "default" (US-ASCII by RFC 2045), or
 	// "guessed".
 	CharsetSource string `json:"charset_source"`
 	Size          int    `json:"size"` // decoded bytes before charset conversion
-	Part          string `json:"part"`
+	// Part names where the body came from: a MIME part path ("1.2"), or for a
+	// .msg the property ("msg/body", "msg/html"; "msg/attach/2/body" inside an
+	// embedded message).
+	Part string `json:"part"`
 }
 
 // Attachment is one non-body part. Data holds its decoded bytes (a copy).
@@ -159,9 +164,10 @@ type Part struct {
 
 // state is one parse's shared budget, carried into every nested message.
 type state struct {
-	opt     Options
-	decoded int64
-	parts   int
+	opt      Options
+	decoded  int64
+	parts    int
+	limitHit bool // the MaxDecoded warning for skipped streams was given
 }
 
 // Parse reads r (at most Options.MaxSize bytes), recognizes the format and
@@ -184,7 +190,14 @@ func ParseBytes(b []byte, opt Options) (*Message, error) {
 	case FormatEML:
 		st := &state{opt: opt}
 		return st.parseEML(b, 0), nil
-	case FormatMSG, FormatTNEF:
+	case FormatMSG:
+		st := &state{opt: opt}
+		m, err := st.parseMSG(b, 0)
+		if err != nil {
+			return nil, fmt.Errorf("%w: .msg unreadable: %v", ErrNotMessage, err)
+		}
+		return m, nil
+	case FormatTNEF:
 		return nil, ErrUnsupported
 	default:
 		return nil, ErrNotMessage

@@ -10,7 +10,7 @@ Module path: `github.com/nlink-jp/mailparse`. Design authority:
 [docs/ja/mailparse-rfp.ja.md](docs/ja/mailparse-rfp.ja.md) (English beside it); the comparison with the three
 existing util-series parsers and the measured defects: [docs/ja/mailparse-phase0.ja.md](docs/ja/mailparse-phase0.ja.md).
 
-**Status: in development. Phase 1 (.eml) done; Phase 2 (.msg, CFB, compressed RTF, TNEF) next.**
+**Status: in development. Phase 1 (.eml) done; Phase 2 in progress — CFB and .msg done, compressed RTF and TNEF next.**
 
 ## Build / test
 
@@ -35,6 +35,10 @@ entity.go     parseEML, identity fields, the MIME walk, own multipart splitter, 
 transfer.go   Base64 / quoted-printable that keep what decodes and warn about damage
 charset.go    Declared charset, HTML <meta charset> (x/net/html tokenizer), Japanese guessing, strict decoding
 warnings.go   Warning codes
+codepage.go   Windows code page -> charset (incl. 50220-50222, 51932)
+msg.go        .msg (MS-OXMSG): property streams, transport headers or MAPI identity, bodies, attachments, embedded
+cfb/          Exported MS-CFB reader (FAT/DIFAT/mini-FAT, directory tree; loops and ranges cut)
+internal/cfbtest/ Test-only CFB writer with the sector map, to build and damage fixtures
 testdata/eml/ The Phase 0 fixtures (fictional; byte-exact Japanese encodings)
 docs/{en,ja}/ RFP and the Phase 0 record
 ```
@@ -52,6 +56,10 @@ docs/{en,ja}/ RFP and the Phase 0 record
   is a bug.
 - **Recursion is bounded** by MaxMIMEDepth and MaxMessageDepth; keep it that way (a Go stack overflow is not a
   recoverable panic).
+- **Every .msg stream read is charged to MaxDecoded before it happens** (`msgReader.read`): directory entries can
+  all point at one large chain, so an unbudgeted read multiplies the work.
+- **ISO-2022-JP is 7-bit** and passes for ASCII and UTF-8; `decodeText` tries its escapes first.
+- **Fuzz with `-fuzzminimizetime 1x`** (the Makefile does): minimizing tens-of-KB inputs stalls the run for seconds.
 - **Writing escapes through a tool can turn them into raw characters** (`\uFFFD`, bidi controls).
   `source_test.go` refuses them; re-escape.
 
@@ -59,4 +67,5 @@ docs/{en,ja}/ RFP and the Phase 0 record
 
 - Reads the container only; header semantics, URLs, type detection and hashing belong to consumers.
 - Attachments come back as bytes (a copy).
-- CFB will be read from MS-CFB in-house (Phase 2) and exported as `cfb`; no community dependencies.
+- CFB is read from MS-CFB in-house and exported as `cfb`; no community dependencies.
+- A .msg returns every body it holds (text, HTML, later RTF); a client's choice among them is not guessed.

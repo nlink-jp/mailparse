@@ -16,8 +16,8 @@ It is written for messages composed by an attacker:
 - **Limits** on size, nesting, part count and decoded bytes are shared across one parse, nested messages
   included. It never panics on input; fuzz tests hold it to that.
 
-> Status: in development (v0.x, not yet released). `.eml` is supported; `.msg` and winmail.dat (TNEF) come in
-> the next phase.
+> Status: in development (v0.x, not yet released). `.eml` and Outlook `.msg` are supported; compressed RTF and
+> winmail.dat (TNEF) are being added.
 
 [日本語版 README](README.ja.md)
 
@@ -45,7 +45,26 @@ is `unknown` and is never "parsed" as mail.
 
 Reads: header fields (raw and decoded), address lists, the MIME tree, RFC 2047 / 2231, transfer encodings,
 charsets (declared, HTML `<meta charset>`, or guessed for undeclared Japanese), nested messages
-(message/rfc822 and messages recognized by content), attachment bytes.
+(message/rfc822, .msg embedded messages and messages recognized by content), attachment bytes.
+
+From a `.msg`: the internet headers Outlook kept (`PR_TRANSPORT_MESSAGE_HEADERS`), else the sender, recipients,
+subject and date from MAPI properties with a `no_transport_headers` warning (such a message has no Received
+fields); every body it holds (text and HTML — an attacker can make them differ); attachments with their bytes;
+embedded messages; 8-bit strings decoded with the message code page, including ISO-2022-JP (50220-50222) and
+EUC-JP (51932). Exchange `/O=...` addresses stay in `Raw`.
+
+## Package cfb
+
+`github.com/nlink-jp/mailparse/cfb` reads Compound File Binary files (MS-CFB) — the container of `.msg` and of
+legacy Office documents — for consumers who need to look inside one (a macro storage, say) without a community
+dependency. Loops in sector chains or the directory tree, out-of-range sectors and oversized stream claims are
+cut and reported (`Issues`, `ErrTruncated`); work stays proportional to the input size.
+
+```go
+f, err := cfb.Open(r, cfb.Limits{}) // MaxSize 64 MiB, MaxEntries 4,096 by default
+for _, e := range f.Root.Children { /* storages and streams, in directory order */ }
+data, err := f.ReadStream(f.Root.Child("WordDocument"))
+```
 
 Leaves to the consumer: the meaning of Received or Authentication-Results, URL extraction, attachment type
 detection, hashing.
