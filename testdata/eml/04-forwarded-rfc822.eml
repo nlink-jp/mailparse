@@ -1,0 +1,49 @@
+Received: from mx1.example.com (mx1.example.com [192.0.2.10])
+	by mail.example.org (Postfix) with ESMTPS id 4X1;
+	Fri, 6 Nov 2026 10:00:05 +0900
+Received: from sender.example.net (unknown [198.51.100.7])
+	by mx1.example.com with ESMTP id abc;
+	Fri, 6 Nov 2026 10:00:01 +0900
+Date: Fri, 6 Nov 2026 10:00:00 +0900
+Message-ID: <fixture-4@sender.example.net>
+MIME-Version: 1.0
+From: reporter@example.org
+To: security@example.org
+Subject: FW: Account verification
+Content-Type: multipart/mixed; boundary="o4"
+
+--o4
+Content-Type: text/plain
+
+Please check the attached message.
+--o4
+Content-Type: message/rfc822
+Content-Disposition: attachment; filename="original.eml"
+
+Received: from mx1.example.com (mx1.example.com [192.0.2.10])
+	by mail.example.org (Postfix) with ESMTPS id 4X1;
+	Fri, 6 Nov 2026 10:00:05 +0900
+Received: from sender.example.net (unknown [198.51.100.7])
+	by mx1.example.com with ESMTP id abc;
+	Fri, 6 Nov 2026 10:00:01 +0900
+Date: Fri, 6 Nov 2026 10:00:00 +0900
+Message-ID: <fixture-4-inner@sender.example.net>
+MIME-Version: 1.0
+From: "Support" <support@phish.example>
+To: victim@example.org
+Subject: Account verification
+Content-Type: multipart/mixed; boundary="i4"
+
+--i4
+Content-Type: text/html; charset=utf-8
+
+<a href="https://login.phish.example/verify">https://www.example.com/account</a>
+--i4
+Content-Type: application/zip; name="invoice.zip"
+Content-Disposition: attachment; filename="invoice.zip"
+Content-Transfer-Encoding: base64
+
+UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA==
+--i4--
+
+--o4--

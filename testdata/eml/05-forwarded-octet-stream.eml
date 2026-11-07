@@ -1,0 +1,25 @@
+Received: from mx1.example.com (mx1.example.com [192.0.2.10])
+	by mail.example.org (Postfix) with ESMTPS id 4X1;
+	Fri, 6 Nov 2026 10:00:05 +0900
+Received: from sender.example.net (unknown [198.51.100.7])
+	by mx1.example.com with ESMTP id abc;
+	Fri, 6 Nov 2026 10:00:01 +0900
+Date: Fri, 6 Nov 2026 10:00:00 +0900
+Message-ID: <fixture-5@sender.example.net>
+MIME-Version: 1.0
+From: reporter@example.org
+To: security@example.org
+Subject: FW: suspicious
+Content-Type: multipart/mixed; boundary="o5"
+
+--o5
+Content-Type: text/plain
+
+forwarding
+--o5
+Content-Type: application/octet-stream; name="mail.dat"
+Content-Disposition: attachment; filename="mail.dat"
+Content-Transfer-Encoding: base64
+
+UmVjZWl2ZWQ6IGZyb20gbXgxLmV4YW1wbGUuY29tIChteDEuZXhhbXBsZS5jb20gWzE5Mi4wLjIuMTBdKQ0KCWJ5IG1haWwuZXhhbXBsZS5vcmcgKFBvc3RmaXgpIHdpdGggRVNNVFBTIGlkIDRYMTsNCglGcmksIDYgTm92IDIwMjYgMTA6MDA6MDUgKzA5MDANClJlY2VpdmVkOiBmcm9tIHNlbmRlci5leGFtcGxlLm5ldCAodW5rbm93biBbMTk4LjUxLjEwMC43XSkNCglieSBteDEuZXhhbXBsZS5jb20gd2l0aCBFU01UUCBpZCBhYmM7DQoJRnJpLCA2IE5vdiAyMDI2IDEwOjAwOjAxICswOTAwDQpEYXRlOiBGcmksIDYgTm92IDIwMjYgMTA6MDA6MDAgKzA5MDANCk1lc3NhZ2UtSUQ6IDxmaXh0dXJlLTQtaW5uZXJAc2VuZGVyLmV4YW1wbGUubmV0Pg0KTUlNRS1WZXJzaW9uOiAxLjANCkZyb206ICJTdXBwb3J0IiA8c3VwcG9ydEBwaGlzaC5leGFtcGxlPg0KVG86IHZpY3RpbUBleGFtcGxlLm9yZw0KU3ViamVjdDogQWNjb3VudCB2ZXJpZmljYXRpb24NCkNvbnRlbnQtVHlwZTogbXVsdGlwYXJ0L21peGVkOyBib3VuZGFyeT0iaTQiDQoNCi0taTQNCkNvbnRlbnQtVHlwZTogdGV4dC9odG1sOyBjaGFyc2V0PXV0Zi04DQoNCjxhIGhyZWY9Imh0dHBzOi8vbG9naW4ucGhpc2guZXhhbXBsZS92ZXJpZnkiPmh0dHBzOi8vd3d3LmV4YW1wbGUuY29tL2FjY291bnQ8L2E+DQotLWk0DQpDb250ZW50LVR5cGU6IGFwcGxpY2F0aW9uL3ppcDsgbmFtZT0iaW52b2ljZS56aXAiDQpDb250ZW50LURpc3Bvc2l0aW9uOiBhdHRhY2htZW50OyBmaWxlbmFtZT0iaW52b2ljZS56aXAiDQpDb250ZW50LVRyYW5zZmVyLUVuY29kaW5nOiBiYXNlNjQNCg0KVUVzRkJnQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBPT0NCi0taTQtLQ0K
+--o5--

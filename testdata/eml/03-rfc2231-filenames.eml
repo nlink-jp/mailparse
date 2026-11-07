@@ -1,0 +1,33 @@
+Received: from mx1.example.com (mx1.example.com [192.0.2.10])
+	by mail.example.org (Postfix) with ESMTPS id 4X1;
+	Fri, 6 Nov 2026 10:00:05 +0900
+Received: from sender.example.net (unknown [198.51.100.7])
+	by mx1.example.com with ESMTP id abc;
+	Fri, 6 Nov 2026 10:00:01 +0900
+Date: Fri, 6 Nov 2026 10:00:00 +0900
+Message-ID: <fixture-3@sender.example.net>
+MIME-Version: 1.0
+From: a@sender.example.net
+To: user@example.org
+Subject: rfc2231
+Content-Type: multipart/mixed; boundary="b3"
+
+--b3
+Content-Type: text/plain
+
+see attached
+--b3
+Content-Type: application/pdf
+Content-Disposition: attachment; filename*=UTF-8''%E8%AB%8B%E6%B1%82%E6%9B%B8.pdf
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQKJSBmaXh0dXJlCg==
+--b3
+Content-Type: application/pdf
+Content-Disposition: attachment;
+ filename*0*=UTF-8''%E8%A6%8B%E7%A9%8D;
+ filename*1*=%E6%9B%B8.pdf
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQKJSBmaXh0dXJlCg==
+--b3--

@@ -1,0 +1,24 @@
+Received: from mx1.example.com (mx1.example.com [192.0.2.10])
+	by mail.example.org (Postfix) with ESMTPS id 4X1;
+	Fri, 6 Nov 2026 10:00:05 +0900
+Received: from sender.example.net (unknown [198.51.100.7])
+	by mx1.example.com with ESMTP id abc;
+	Fri, 6 Nov 2026 10:00:01 +0900
+Date: Fri, 6 Nov 2026 10:00:00 +0900
+Message-ID: <fixture-11@sender.example.net>
+MIME-Version: 1.0
+From: a@sender.example.net
+To: user@example.org
+Subject: bad base64
+Content-Type: multipart/mixed; boundary="b11"
+
+--b11
+Content-Type: text/plain
+
+x
+--b11
+Content-Type: application/octet-stream; name="a.bin"
+Content-Transfer-Encoding: base64
+
+QUJD!!REVG*R0hJ
+--b11--

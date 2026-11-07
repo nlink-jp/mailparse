@@ -1,0 +1,15 @@
+Authentication-Results: mx.example.org; spf=pass smtp.mailfrom=sender.example.net; dkim=pass header.d=sender.example.net header.s=s1; dmarc=pass header.from=sender.example.net
+Received: from mx1.example.com (mx1.example.com [192.0.2.10]) by mail.example.org; Fri, 6 Nov 2026 10:00:05 +0900
+Authentication-Results: mx.example.org; spf=fail smtp.mailfrom=forged.example
+Received: from forged.example (forged.example [203.0.113.66]) by mx1.example.com; Fri, 6 Nov 2026 10:00:02 +0900
+From: ceo@example.org
+From: "CEO" <ceo@example.org>, attacker@phish.example
+Sender: attacker@phish.example
+To: finance@example.org
+Subject: duplicated headers
+Date: Fri, 6 Nov 2026 10:00:00 +0900
+Message-ID: <fixture-7@phish.example>
+MIME-Version: 1.0
+Content-Type: text/plain
+
+body
