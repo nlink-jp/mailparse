@@ -22,7 +22,6 @@ const (
 	WarnPartLimit           = "part_limit"                // parts beyond Options.MaxParts were not read
 	WarnDecodedLimit        = "decoded_limit"             // decoded data beyond Options.MaxDecoded was not kept
 	WarnMessageDepthLimit   = "message_depth_limit"       // a nested message deeper than Options.MaxMessageDepth was not opened
-	WarnNestedUnsupported   = "nested_format_unsupported" // a nested .msg / TNEF was not opened (not supported yet)
 	WarnInvalidBase64       = "invalid_base64"            // Base64 data held characters outside the alphabet or a broken tail; they were skipped
 	WarnInvalidQP           = "invalid_quoted_printable"  // quoted-printable data held a broken escape; it was kept as written
 	WarnUnknownEncoding     = "unknown_transfer_encoding" // an unknown Content-Transfer-Encoding; the data was kept as is
@@ -39,6 +38,7 @@ const (
 	WarnNestedUnreadable       = "nested_unreadable"        // an attached message was recognized but could not be read; it stays an attachment
 	WarnRTFCRC                 = "rtf_crc_mismatch"         // compressed RTF failed its CRC check; the expanded text was kept as evidence
 	WarnRTFDamaged             = "rtf_damaged"              // compressed RTF was cut, had an unknown type or did not expand to RTF
+	WarnTNEFDamaged            = "tnef_damaged"             // a TNEF stream was cut, had a bad checksum, an unknown level or a broken property list; what was readable was kept
 )
 
 // Warning is one thing a parse met and handled.

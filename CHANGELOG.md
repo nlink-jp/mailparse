@@ -33,6 +33,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   kept. HTML or plain text encapsulated by Outlook (MS-OXRTFEX) is recovered,
   with `\ansicpg`, per-font `\fcharset` / `\cpg`, `\'hh` and `\uN`; plain RTF
   gives its visible text.
+- TNEF / winmail.dat reading (MS-OXTNEF): bodies (compressed RTF, HTML,
+  text), attachments with bytes, embedded messages, the recipient table and
+  identity from the encapsulated MAPI properties; checksums verified; opened
+  wherever it appears (an attachment of an .eml or .msg) and by `ParseTNEF`.
 
 ### Fixed
 

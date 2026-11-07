@@ -308,8 +308,13 @@ func (st *state) nested(data []byte, f Format, msgDepth int, p string, warn func
 			return nil
 		}
 		return m
-	default:
-		warn(Warning{Code: WarnNestedUnsupported, Detail: "a nested " + string(f) + " was not opened (not supported yet)", Part: p})
-		return nil
+	case FormatTNEF:
+		m, err := st.parseTNEF(data, msgDepth+1, "tnef")
+		if err != nil {
+			warn(Warning{Code: WarnNestedUnreadable, Detail: "an attached TNEF stream could not be read: " + err.Error(), Part: p})
+			return nil
+		}
+		return m
 	}
+	return nil
 }

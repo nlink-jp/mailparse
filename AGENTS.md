@@ -10,7 +10,7 @@ Module path: `github.com/nlink-jp/mailparse`. Design authority:
 [docs/ja/mailparse-rfp.ja.md](docs/ja/mailparse-rfp.ja.md) (English beside it); the comparison with the three
 existing util-series parsers and the measured defects: [docs/ja/mailparse-phase0.ja.md](docs/ja/mailparse-phase0.ja.md).
 
-**Status: in development. Phase 1 (.eml) done; Phase 2 in progress — CFB, .msg and compressed RTF done, TNEF next.**
+**Status: in development. Phases 1 (.eml) and 2 (CFB, .msg, compressed RTF, TNEF) done; Phase 3 (independent review, release) next.**
 
 ## Build / test
 
@@ -38,6 +38,7 @@ warnings.go   Warning codes
 codepage.go   Windows code page -> charset (incl. 50220-50222, 51932)
 msg.go        .msg (MS-OXMSG): property streams, transport headers or MAPI identity, bodies, attachments, embedded
 rtf.go        Compressed RTF (MS-OXRTFCP) and de-encapsulation / text extraction (MS-OXRTFEX), explicit group stack
+tnef.go       TNEF (MS-OXTNEF): attributes with checksums, encapsulated MAPI property lists, recipient table, attachments
 cfb/          Exported MS-CFB reader (FAT/DIFAT/mini-FAT, directory tree; loops and ranges cut)
 internal/cfbtest/ Test-only CFB writer with the sector map, to build and damage fixtures
 testdata/eml/ The Phase 0 fixtures (fictional; byte-exact Japanese encodings)
@@ -62,6 +63,9 @@ docs/{en,ja}/ RFP and the Phase 0 record
 - **ISO-2022-JP is 7-bit** and passes for ASCII and UTF-8; `decodeText` tries its escapes first.
 - **RTF code pages: HTMLTAG content uses the document default (`\ansicpg`); text outside it uses the current
   font's code page** (MS-OXRTFEX, "Extracting Encapsulated HTML from RTF"). `\fN` is tracked even inside `\htmlrtf`-suppressed text.
+- **MAPI properties are one `props` shape whatever the container** (.msg storage or TNEF list); identity, bodies
+  and attachments are filled from it by the same functions (`identityFromProps`, `propBodies`, `mapiAttachment`).
+- **TNEF has no real sample yet**: only spec-built fixtures. Measure on a real winmail.dat when one is available.
 - **`make lint` checks gofmt itself**: golangci-lint here does not.
 - **Fuzz with `-fuzzminimizetime 1x`** (the Makefile does): minimizing tens-of-KB inputs stalls the run for seconds.
 - **Writing escapes through a tool can turn them into raw characters** (`\uFFFD`, bidi controls, a soft hyphen,

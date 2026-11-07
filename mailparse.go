@@ -21,9 +21,8 @@ const (
 
 // Errors. Everything else a parse meets is a Warning, not an error.
 var (
-	ErrTooLarge    = errors.New("mailparse: input is larger than Options.MaxSize")
-	ErrNotMessage  = errors.New("mailparse: input is not a recognized message")
-	ErrUnsupported = errors.New("mailparse: TNEF is not supported yet")
+	ErrTooLarge   = errors.New("mailparse: input is larger than Options.MaxSize")
+	ErrNotMessage = errors.New("mailparse: input is not a recognized message")
 )
 
 // Default limits (the RFP §2 table).
@@ -130,8 +129,8 @@ type Body struct {
 	CharsetSource string `json:"charset_source"`
 	Size          int    `json:"size"` // decoded bytes before charset conversion
 	// Part names where the body came from: a MIME part path ("1.2"), or for a
-	// .msg the property ("msg/body", "msg/html"; "msg/attach/2/body" inside an
-	// embedded message).
+	// .msg or TNEF the property ("msg/body", "msg/html", "msg/rtf",
+	// "tnef/body"; "msg/attach/2/body" inside an embedded message).
 	Part string `json:"part"`
 }
 
@@ -198,7 +197,12 @@ func ParseBytes(b []byte, opt Options) (*Message, error) {
 		}
 		return m, nil
 	case FormatTNEF:
-		return nil, ErrUnsupported
+		st := &state{opt: opt}
+		m, err := st.parseTNEF(b, 0, "tnef")
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrNotMessage, err)
+		}
+		return m, nil
 	default:
 		return nil, ErrNotMessage
 	}

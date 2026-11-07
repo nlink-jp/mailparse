@@ -16,8 +16,9 @@ It is written for messages composed by an attacker:
 - **Limits** on size, nesting, part count and decoded bytes are shared across one parse, nested messages
   included. It never panics on input; fuzz tests hold it to that.
 
-> Status: in development (v0.x, not yet released). `.eml` and Outlook `.msg` (with compressed RTF) are supported;
-> winmail.dat (TNEF) is being added.
+> Status: in development (v0.x, not yet released). `.eml`, Outlook `.msg` (with compressed RTF) and winmail.dat
+> (TNEF) are supported. `.msg` has been checked on a real Outlook message; TNEF only on samples built from the
+> specification.
 
 [日本語版 README](README.ja.md)
 
@@ -54,6 +55,14 @@ encapsulated in it (MS-OXRTFEX) or the visible text of plain RTF — since an at
 mismatch is warned about and the text kept as evidence); attachments with their bytes;
 embedded messages; 8-bit strings decoded with the message code page, including ISO-2022-JP (50220-50222) and
 EUC-JP (51932). Exchange `/O=...` addresses stay in `Raw`.
+
+From winmail.dat (TNEF, usually an `application/ms-tnef` attachment, opened as a nested message of format
+`tnef`): the bodies (the compressed RTF Outlook puts there, HTML, text), the attachments with their bytes and
+names, embedded messages, recipients from the recipient table, and the sender, subject and date from the
+encapsulated MAPI properties; 8-bit strings use the OEM code page. A failed checksum is warned about and the
+value kept.
+
+`ParseEML`, `ParseMSG` and `ParseTNEF` read one format without detection.
 
 ## Package cfb
 

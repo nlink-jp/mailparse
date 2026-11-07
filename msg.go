@@ -54,6 +54,7 @@ const (
 const (
 	ptInt32   = 0x0003
 	ptBoolean = 0x000B
+	ptObject  = 0x000D
 	ptString8 = 0x001E
 	ptUnicode = 0x001F
 	ptTime    = 0x0040
@@ -271,6 +272,22 @@ func (r *msgReader) message(dir *cfb.Entry, hdr, depth int, part string) *Messag
 // headers. From is the "sent representing" mailbox Outlook displays; Sender is
 // the mailbox that sent it, kept when it differs.
 func (r *msgReader) identityFromProps(m *Message, p *props, dir *cfb.Entry, part string, warn func(Warning)) {
+	identityFromProps(m, p)
+	var recips []*props
+	for _, c := range sortedChildren(dir, recipPrefix) {
+		if c.Type != cfb.TypeStorage {
+			continue
+		}
+		q, _ := r.object(c, 8, part+"/recip/"+childIndex(c.Name, recipPrefix), warn)
+		q.charset = p.charset
+		recips = append(recips, q)
+	}
+	setRecipients(m, recips)
+}
+
+// identityFromProps fills sender, subject, message ID and date from MAPI
+// properties (.msg without transport headers, TNEF).
+func identityFromProps(m *Message, p *props) {
 	from := mapiMailbox(p, pidSentRepName, pidSentRepEmail, pidSentRepSMTP)
 	sender := mapiMailbox(p, pidSenderName, pidSenderEmail, pidSenderSMTP)
 	if from.Raw == "" {
@@ -289,16 +306,17 @@ func (r *msgReader) identityFromProps(m *Message, p *props, dir *cfb.Entry, part
 	} else if t, ok := p.time(pidDeliveryTime); ok {
 		m.Date = t
 	}
+}
 
+// setRecipients sorts recipient objects into To, Cc and Bcc by
+// PidTagRecipientType.
+func setRecipients(m *Message, recips []*props) {
 	var to, cc, bcc []AddressList
-	for _, c := range sortedChildren(dir, recipPrefix) {
-		rp := part + "/recip/" + childIndex(c.Name, recipPrefix)
-		if c.Type != cfb.TypeStorage {
+	for _, q := range recips {
+		mb := mapiMailbox(q, pidDisplayName, pidEmailAddress, pidSMTPAddress)
+		if mb.Raw == "" {
 			continue
 		}
-		q, _ := r.object(c, 8, rp, warn)
-		q.charset = p.charset
-		mb := mapiMailbox(q, pidDisplayName, pidEmailAddress, pidSMTPAddress)
 		typ, _ := q.int32(pidRecipientType)
 		switch typ & 0x0FFFFFFF { // high bits are flags (MAPI_P1, MAPI_SUBMITTED)
 		case 2:
