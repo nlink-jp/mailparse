@@ -47,14 +47,15 @@ func (st *state) parseTNEF(b []byte, depth int, part string) (*Message, error) {
 		return nil, fmt.Errorf("no TNEF signature")
 	}
 	m := &Message{Format: FormatTNEF, Size: int64(len(b)), Bodies: []Body{}, Attachments: []Attachment{}, Warnings: []Warning{}}
-	warn := func(w Warning) { m.Warnings = append(m.Warnings, w) }
+	warn := warner(m)
 
 	msgProps := &props{fixed: map[uint32][8]byte{}, part: part, warn: warn}
 	var vars map[uint32][]byte
-	msgProps.varLoad = func(tag uint32) ([]byte, bool) { v, ok := vars[tag]; return v, ok }
+	msgProps.varLoad = st.tnefLoader(&vars, part, warn)
 	var recips []*props
 	var atts []*tnefAttachment
-	var subject, messageID string
+	attsCut := false
+	var subject string
 	var legacyBody []byte
 	oemCP := uint32(0)
 	bad := 0
@@ -90,7 +91,8 @@ func (st *state) parseTNEF(b []byte, depth int, part string) (*Message, error) {
 			case attSubject:
 				subject = string(trimNUL(data))
 			case attMessageID:
-				messageID = string(trimNUL(data))
+				// MS-OXTNEF 2.1.3.3.6: this is PidTagSearchKey written as hex,
+				// not the internet Message-ID, so it is not reported as one.
 			case attBody:
 				legacyBody = data
 			case attMsgProps:
@@ -110,8 +112,16 @@ func (st *state) parseTNEF(b []byte, depth int, part string) (*Message, error) {
 			}
 		case tnefLevelAttachment:
 			if id == attAttachRendData || len(atts) == 0 {
+				// Records stop at MaxParts: a stream of empty attachments must
+				// not allocate without bound before the part count is applied.
+				if attsCut || len(atts) >= st.opt.MaxParts {
+					attsCut = true
+					continue
+				}
 				ap := part + "/attach/" + strconv.Itoa(len(atts))
 				atts = append(atts, &tnefAttachment{part: ap})
+			} else if attsCut {
+				continue
 			}
 			a := atts[len(atts)-1]
 			switch id {
@@ -122,7 +132,7 @@ func (st *state) parseTNEF(b []byte, depth int, part string) (*Message, error) {
 			case attAttachment:
 				fixed, v := st.tnefProps(data, a.part, warn)
 				q := &props{fixed: fixed, part: a.part, warn: warn}
-				q.varLoad = func(tag uint32) ([]byte, bool) { x, ok := v[tag]; return x, ok }
+				q.varLoad = st.tnefLoader(&v, a.part, warn)
 				a.props = q
 			}
 		default:
@@ -133,13 +143,16 @@ func (st *state) parseTNEF(b []byte, depth int, part string) (*Message, error) {
 		warn(Warning{Code: WarnTNEFDamaged, Detail: fmt.Sprintf("%d attributes failed their checksum; their values were kept", bad), Part: part})
 	}
 
-	charset := codePageCharset(oemCP)
-	if cp, ok := msgProps.int32(pidInternetCodepage); ok && codePageCharset(cp) != "" {
-		charset = codePageCharset(cp)
-	} else if cp, ok := msgProps.int32(pidMessageCodepage); ok && codePageCharset(cp) != "" {
-		charset = codePageCharset(cp)
+	if attsCut {
+		warn(Warning{Code: WarnPartLimit, Detail: fmt.Sprintf("TNEF attachments after the first %d were not read", st.opt.MaxParts), Part: part})
 	}
+	// MS-OXTNEF 2.3.3.2: 8-bit strings, legacy attributes included, are in the
+	// OEM code page; the HTML body follows the internet code page.
+	internetCP, msgCP := cpCharset(msgProps, pidInternetCodepage), cpCharset(msgProps, pidMessageCodepage)
+	charset := firstNonEmpty(codePageCharset(oemCP), internetCP, msgCP)
 	msgProps.charset = charset
+	msgProps.bodyCharset = charset
+	msgProps.htmlCharset = firstNonEmpty(internetCP, charset)
 	legacy := func(s string) string {
 		if s == "" || isASCII([]byte(s)) {
 			return s
@@ -151,18 +164,16 @@ func (st *state) parseTNEF(b []byte, depth int, part string) (*Message, error) {
 		h, _ := st.readHeader(append(raw, "\r\n\r\n"...), part+"/headers", warn)
 		m.Header = h
 		st.fillIdentity(m, warn)
+		compareIdentity(m, msgProps, part, warn)
 	} else {
-		identityFromProps(m, msgProps)
+		identityFromProps(m, msgProps, part, warn)
 		for _, q := range recips {
 			q.charset = charset
 		}
-		setRecipients(m, recips)
+		setRecipients(m, recips, part, warn)
 	}
 	if m.Subject == "" {
 		m.Subject = legacy(subject)
-	}
-	if m.MessageID == "" {
-		m.MessageID = legacy(messageID)
 	}
 
 	before := len(m.Bodies)
@@ -191,6 +202,7 @@ func (st *state) parseTNEF(b []byte, depth int, part string) (*Message, error) {
 func (st *state) tnefAttach(ta *tnefAttachment, charset string, depth int, warn func(Warning)) Attachment {
 	a := Attachment{Part: ta.part, Disposition: "attachment"}
 	data := ta.data
+	charged := false // values read through props are charged when loaded
 	var embedded []byte
 	if ta.props != nil {
 		ta.props.charset = charset
@@ -199,11 +211,13 @@ func (st *state) tnefAttach(ta *tnefAttachment, charset string, depth int, warn 
 			if len(v) >= 16 && bytes.Equal(v[:16], iidMessage) {
 				embedded = v[16:]
 			} else if data == nil && len(v) >= 16 {
-				data = v[16:]
+				data, charged = v[16:], true
 			}
 		}
-		if v, ok := ta.props.varLoad(uint32(pidAttachData)<<16 | ptBinary); ok && data == nil {
-			data = v
+		if data == nil {
+			if v, ok := ta.props.varLoad(uint32(pidAttachData)<<16 | ptBinary); ok {
+				data, charged = v, true
+			}
 		}
 	}
 	if a.Filename == "" && ta.title != "" {
@@ -220,7 +234,7 @@ func (st *state) tnefAttach(ta *tnefAttachment, charset string, depth int, warn 
 			warn(Warning{Code: WarnMessageDepthLimit, Detail: fmt.Sprintf("a message nested deeper than %d layers was not opened", st.opt.MaxMessageDepth), Part: ta.part})
 			return a
 		}
-		if nm, err := st.parseTNEF(embedded, depth+1, ta.part); err == nil {
+		if nm, err := st.parseTNEF(embedded, depth+1, "tnef"); err == nil {
 			a.Message = nm
 		} else {
 			warn(Warning{Code: WarnNestedUnreadable, Detail: "an attached message object is not a TNEF stream", Part: ta.part})
@@ -231,7 +245,11 @@ func (st *state) tnefAttach(ta *tnefAttachment, charset string, depth int, warn 
 		warn(Warning{Code: WarnAttachmentNotExtracted, Detail: "a TNEF attachment carries no data", Part: ta.part})
 		return a
 	}
-	a.Data = st.budgeted(bytes.Clone(data), ta.part, warn)
+	if charged {
+		a.Data = data
+	} else {
+		a.Data = st.budgeted(bytes.Clone(data), ta.part, warn)
+	}
 	a.Size = len(a.Data)
 	if a.MediaType == "" {
 		a.MediaType = "application/octet-stream"
@@ -258,15 +276,23 @@ func (st *state) tnefRecipients(data []byte, part string, warn func(Warning)) []
 	rows := binary.LittleEndian.Uint32(data)
 	rd := &tnefCursor{b: data, i: 4}
 	var out []*props
-	for r := uint32(0); r < rows && rd.left() >= 4; r++ {
+	r := uint32(0)
+	for ; r < rows && rd.left() >= 4; r++ {
 		fixed, v, ok := rd.propList()
-		q := &props{fixed: fixed, part: part, warn: warn}
-		q.varLoad = func(tag uint32) ([]byte, bool) { x, ok := v[tag]; return x, ok }
+		rp := part + "/recip/" + strconv.FormatUint(uint64(r), 10)
+		q := &props{fixed: fixed, part: rp, warn: warn}
+		q.varLoad = st.tnefLoader(&v, rp, warn)
 		out = append(out, q)
 		if !ok {
 			warn(Warning{Code: WarnTNEFDamaged, Detail: "a recipient row ended inside a property; reading stopped", Part: part})
-			break
+			return out
 		}
+	}
+	switch {
+	case r < rows:
+		warn(Warning{Code: WarnTNEFDamaged, Detail: fmt.Sprintf("the recipient table declares %d rows and holds %d", rows, r), Part: part})
+	case rd.left() > 0:
+		warn(Warning{Code: WarnTNEFDamaged, Detail: fmt.Sprintf("%d bytes after the recipient table were skipped", rd.left()), Part: part})
 	}
 	return out
 }
@@ -275,10 +301,30 @@ func (st *state) tnefRecipients(data []byte, part string, warn func(Warning)) []
 func (st *state) tnefProps(data []byte, part string, warn func(Warning)) (map[uint32][8]byte, map[uint32][]byte) {
 	rd := &tnefCursor{b: data}
 	fixed, vars, ok := rd.propList()
-	if !ok {
+	switch {
+	case !ok:
 		warn(Warning{Code: WarnTNEFDamaged, Detail: "an encapsulated property list ended inside a property; the properties before it were kept", Part: part})
+	case rd.left() > 0:
+		warn(Warning{Code: WarnTNEFDamaged, Detail: fmt.Sprintf("%d bytes after an encapsulated property list were skipped", rd.left()), Part: part})
 	}
 	return fixed, vars
+}
+
+// tnefLoader returns a props.varLoad over values read from a TNEF property
+// list, charging each value read to MaxDecoded as .msg stream reads are, and
+// returning a copy so nothing aliases the input.
+func (st *state) tnefLoader(vars *map[uint32][]byte, part string, warn func(Warning)) func(uint32) ([]byte, bool) {
+	return func(tag uint32) ([]byte, bool) {
+		v, ok := (*vars)[tag]
+		if !ok {
+			return nil, false
+		}
+		if st.decoded >= st.opt.MaxDecoded {
+			st.limitWarn(part, warn)
+			return nil, false
+		}
+		return st.budgeted(bytes.Clone(v), part, warn), true
+	}
 }
 
 // tnefCursor reads encapsulated MAPI properties (MS-OXTNEF 2.1.3.4). Every

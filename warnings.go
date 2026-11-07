@@ -38,6 +38,10 @@ const (
 	WarnNestedUnreadable       = "nested_unreadable"        // an attached message was recognized but could not be read; it stays an attachment
 	WarnRTFCRC                 = "rtf_crc_mismatch"         // compressed RTF failed its CRC check; the expanded text was kept as evidence
 	WarnRTFDamaged             = "rtf_damaged"              // compressed RTF was cut, had an unknown type or did not expand to RTF
+	WarnWarningLimit           = "warning_limit"            // one warning code repeated more than 100 times in a message; the rest were counted out, not recorded
+	WarnAddressMismatch        = "mapi_address_mismatch"    // a .msg/TNEF mailbox shows one address and carries a different SMTP address; Address holds the SMTP one
+	WarnHeaderMismatch         = "mapi_header_mismatch"     // the MAPI sender or subject Outlook displays differs from the internet headers that were used
+	WarnRecipientType          = "recipient_type"           // a recipient had no known type (To, Cc, Bcc) and was read as To, or had no name or address and was skipped
 	WarnTNEFDamaged            = "tnef_damaged"             // a TNEF stream was cut, had a bad checksum, an unknown level or a broken property list; what was readable was kept
 )
 

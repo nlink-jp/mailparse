@@ -162,6 +162,25 @@ type Part struct {
 }
 
 // state is one parse's shared budget, carried into every nested message.
+// maxWarningsPerCode bounds how many warnings of one code a message keeps: a
+// hostile input can repeat one fault millions of times. Past it, one
+// warning_limit warning says so.
+const maxWarningsPerCode = 100
+
+// warner returns the function that records warnings for m, capped per code.
+func warner(m *Message) func(Warning) {
+	counts := map[string]int{}
+	return func(w Warning) {
+		counts[w.Code]++
+		switch n := counts[w.Code]; {
+		case n <= maxWarningsPerCode:
+			m.Warnings = append(m.Warnings, w)
+		case n == maxWarningsPerCode+1:
+			m.Warnings = append(m.Warnings, Warning{Code: WarnWarningLimit, Detail: fmt.Sprintf("further %s warnings after the first %d were not recorded", w.Code, maxWarningsPerCode), Part: w.Part})
+		}
+	}
+}
+
 type state struct {
 	opt      Options
 	decoded  int64

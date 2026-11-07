@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/text/encoding/charmap"
 	"golang.org/x/text/encoding/japanese"
 )
 
@@ -289,4 +290,67 @@ func TestTNEFPartLimit(t *testing.T) {
 	if len(m.Attachments) != 2 || codes(m.Warnings)[WarnPartLimit] != 1 {
 		t.Fatalf("%d %v", len(m.Attachments), m.Warnings)
 	}
+}
+
+func TestTNEFReviewFindings(t *testing.T) {
+	t.Run("OEM code page for strings, internet for HTML", func(t *testing.T) {
+		b := tnefStream(
+			tnefAttr(tnefLevelMessage, attOemCodepage, append(le32b(1251), le32b(0)...)),
+			tnefAttr(tnefLevelMessage, attSubject, append([]byte(enc(charmap.Windows1251, "привет")), 0)),
+			tnefAttr(tnefLevelMessage, attMsgProps, tnefPropList(
+				tprop{tag: tag(pidInternetCodepage, ptInt32), val: uint32(20866)},
+				tprop{tag: tag(pidSenderName, ptString8), val: append([]byte(enc(charmap.Windows1251, "отдел")), 0)},
+				tprop{tag: tag(pidHTML, ptBinary), val: []byte(enc(charmap.KOI8R, "<p>письмо</p>"))},
+			)),
+		)
+		m, _ := ParseBytes(b, Options{})
+		if m.Subject != "привет" || m.From[0].Mailboxes[0].Name != "отдел" || m.Bodies[0].Content != "<p>письмо</p>" {
+			t.Fatalf("%q %+v %+v", m.Subject, m.From, m.Bodies)
+		}
+	})
+	t.Run("MAPI values are charged to MaxDecoded", func(t *testing.T) {
+		b := tnefStream(tnefAttr(tnefLevelMessage, attMsgProps, tnefPropList(
+			tprop{tag: tag(pidHTML, ptBinary), val: bytes.Repeat([]byte("<p>x</p>"), 20000)},
+			tprop{tag: tag(pidBody, ptUnicode), val: u16le(strings.Repeat("y", 50000))},
+		)))
+		m, _ := ParseBytes(b, Options{MaxDecoded: 1000})
+		total := 0
+		for _, bd := range m.Bodies {
+			total += bd.Size
+		}
+		if codes(m.Warnings)[WarnDecodedLimit] == 0 || total > 1000 {
+			t.Fatalf("%v %d", m.Warnings, total)
+		}
+	})
+	t.Run("floods are bounded", func(t *testing.T) {
+		var attrs [][]byte
+		for range 3000 {
+			attrs = append(attrs, tnefAttr(9, attSubject, nil))
+		}
+		for range 3000 {
+			attrs = append(attrs, tnefAttr(tnefLevelAttachment, attAttachRendData, nil))
+		}
+		m, _ := ParseBytes(tnefStream(attrs...), Options{MaxParts: 10})
+		got := codes(m.Warnings)
+		if got[WarnTNEFDamaged] != maxWarningsPerCode || got[WarnWarningLimit] != 1 || len(m.Attachments) != 10 || got[WarnPartLimit] != 1 {
+			t.Fatalf("%v, %d attachments", got, len(m.Attachments))
+		}
+	})
+	t.Run("attMessageID is not a Message-ID", func(t *testing.T) {
+		m, _ := ParseBytes(tnefStream(tnefAttr(tnefLevelMessage, attMessageID, []byte("0000000046A2B8C3D1E2F3A4\x00"))), Options{})
+		if m.MessageID != "" {
+			t.Fatalf("%q", m.MessageID)
+		}
+	})
+	t.Run("short recipient table and trailing bytes", func(t *testing.T) {
+		row := tnefPropList(tprop{tag: tag(pidSMTPAddress, ptUnicode), val: u16le("a@example.org")})
+		list := append(tnefPropList(tprop{tag: tag(pidSubject, ptUnicode), val: u16le("s")}), make([]byte, 400)...)
+		m, _ := ParseBytes(tnefStream(
+			tnefAttr(tnefLevelMessage, attRecipTable, append(le32b(5), row...)),
+			tnefAttr(tnefLevelMessage, attMsgProps, list),
+		), Options{})
+		if codes(m.Warnings)[WarnTNEFDamaged] != 2 || m.Subject != "s" || len(m.To) != 1 {
+			t.Fatalf("%v", m.Warnings)
+		}
+	})
 }

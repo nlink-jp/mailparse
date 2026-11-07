@@ -72,12 +72,14 @@ const (
 // came from (.msg storage or TNEF): fixed-length values by tag, and
 // variable-length values loaded on demand.
 type props struct {
-	fixed   map[uint32][8]byte
-	varLoad func(tag uint32) ([]byte, bool) // reads a variable-length value
-	varHas  func(tag uint32) bool
-	charset string // for PtypString8 values; "" when unknown
-	part    string
-	warn    func(Warning)
+	fixed       map[uint32][8]byte
+	varLoad     func(tag uint32) ([]byte, bool) // reads a variable-length value
+	varHas      func(tag uint32) bool
+	charset     string // for PtypString8 values; "" when unknown
+	bodyCharset string // for an 8-bit PidTagBody; charset when unset
+	htmlCharset string // for PidTagHtml; bodyCharset when unset
+	part        string
+	warn        func(Warning)
 }
 
 func (p *props) int32(id uint16) (uint32, bool) {
@@ -170,7 +172,10 @@ type msgReader struct {
 
 // parseMSG opens a .msg held in b.
 func (st *state) parseMSG(b []byte, depth int) (*Message, error) {
-	f, err := cfb.OpenBytes(b, cfb.Limits{MaxSize: int64(len(b)) + 1})
+	// The entry limit follows the file: a valid .msg with many recipients
+	// holds far more than cfb's default 4,096 entries, and Open's work is
+	// bounded by the file size anyway.
+	f, err := cfb.OpenBytes(b, cfb.Limits{MaxSize: int64(len(b)) + 1, MaxEntries: len(b)/128 + 1})
 	if err != nil {
 		return nil, err
 	}
@@ -246,18 +251,20 @@ func (r *msgReader) object(dir *cfb.Entry, hdr int, part string, warn func(Warni
 // message reads a message object (the top one or an embedded one).
 func (r *msgReader) message(dir *cfb.Entry, hdr, depth int, part string) *Message {
 	m := &Message{Format: FormatMSG, Bodies: []Body{}, Attachments: []Attachment{}, Warnings: []Warning{}}
-	warn := func(w Warning) { m.Warnings = append(m.Warnings, w) }
+	warn := warner(m)
 	p, _ := r.object(dir, hdr, part, warn)
-	if cp, ok := p.int32(pidInternetCodepage); ok && codePageCharset(cp) != "" {
-		p.charset = codePageCharset(cp)
-	} else if cp, ok := p.int32(pidMessageCodepage); ok && codePageCharset(cp) != "" {
-		p.charset = codePageCharset(cp)
-	}
+	// MS-OXCMSG: PidTagMessageCodepage is the code page of the 8-bit string
+	// properties; PidTagInternetCodepage that of the body and HTML.
+	msgCP, internetCP := cpCharset(p, pidMessageCodepage), cpCharset(p, pidInternetCodepage)
+	p.charset = firstNonEmpty(msgCP, internetCP)
+	p.bodyCharset = firstNonEmpty(internetCP, msgCP)
+	p.htmlCharset = p.bodyCharset
 
 	if raw, ok := p.rawString(pidTransportHeaders); ok && len(strings.TrimSpace(string(raw))) > 0 {
 		h, _ := r.st.readHeader(append(raw, "\r\n\r\n"...), part+"/headers", warn)
 		m.Header = h
 		r.st.fillIdentity(m, warn)
+		compareIdentity(m, p, part, warn)
 	} else {
 		warn(Warning{Code: WarnNoTransportHeaders, Detail: "the message has no internet headers (no Received fields); sender, recipients, subject and date were taken from MAPI properties", Part: part})
 		r.identityFromProps(m, p, dir, part, warn)
@@ -272,7 +279,7 @@ func (r *msgReader) message(dir *cfb.Entry, hdr, depth int, part string) *Messag
 // headers. From is the "sent representing" mailbox Outlook displays; Sender is
 // the mailbox that sent it, kept when it differs.
 func (r *msgReader) identityFromProps(m *Message, p *props, dir *cfb.Entry, part string, warn func(Warning)) {
-	identityFromProps(m, p)
+	identityFromProps(m, p, part, warn)
 	var recips []*props
 	for _, c := range sortedChildren(dir, recipPrefix) {
 		if c.Type != cfb.TypeStorage {
@@ -282,14 +289,51 @@ func (r *msgReader) identityFromProps(m *Message, p *props, dir *cfb.Entry, part
 		q.charset = p.charset
 		recips = append(recips, q)
 	}
-	setRecipients(m, recips)
+	setRecipients(m, recips, part, warn)
+}
+
+func cpCharset(p *props, id uint16) string {
+	if cp, ok := p.int32(id); ok {
+		return codePageCharset(cp)
+	}
+	return ""
+}
+
+func firstNonEmpty(s ...string) string {
+	for _, x := range s {
+		if x != "" {
+			return x
+		}
+	}
+	return ""
+}
+
+// compareIdentity warns when the sender or subject Outlook displays (MAPI
+// properties) differs from the internet headers the message was read from.
+func compareIdentity(m *Message, p *props, part string, warn func(Warning)) {
+	if subj, ok := p.str(pidSubject); ok && strings.TrimSpace(subj) != strings.TrimSpace(m.Subject) {
+		warn(Warning{Code: WarnHeaderMismatch, Detail: "the MAPI subject differs from the Subject header", Part: part})
+	}
+	mapiFrom := mapiMailbox(p, pidSentRepName, pidSentRepEmail, pidSentRepSMTP, part, nil)
+	if len(mapiFrom.Mailboxes) == 0 || mapiFrom.Mailboxes[0].Address == "" {
+		return
+	}
+	want := strings.ToLower(mapiFrom.Mailboxes[0].Address)
+	for _, l := range m.From {
+		for _, mb := range l.Mailboxes {
+			if strings.ToLower(mb.Address) == want {
+				return
+			}
+		}
+	}
+	warn(Warning{Code: WarnHeaderMismatch, Detail: "the MAPI sender address differs from every From address in the headers", Part: part})
 }
 
 // identityFromProps fills sender, subject, message ID and date from MAPI
 // properties (.msg without transport headers, TNEF).
-func identityFromProps(m *Message, p *props) {
-	from := mapiMailbox(p, pidSentRepName, pidSentRepEmail, pidSentRepSMTP)
-	sender := mapiMailbox(p, pidSenderName, pidSenderEmail, pidSenderSMTP)
+func identityFromProps(m *Message, p *props, part string, warn func(Warning)) {
+	from := mapiMailbox(p, pidSentRepName, pidSentRepEmail, pidSentRepSMTP, part, warn)
+	sender := mapiMailbox(p, pidSenderName, pidSenderEmail, pidSenderSMTP, part, warn)
 	if from.Raw == "" {
 		from = sender
 	}
@@ -310,20 +354,24 @@ func identityFromProps(m *Message, p *props) {
 
 // setRecipients sorts recipient objects into To, Cc and Bcc by
 // PidTagRecipientType.
-func setRecipients(m *Message, recips []*props) {
+func setRecipients(m *Message, recips []*props, part string, warn func(Warning)) {
 	var to, cc, bcc []AddressList
 	for _, q := range recips {
-		mb := mapiMailbox(q, pidDisplayName, pidEmailAddress, pidSMTPAddress)
+		mb := mapiMailbox(q, pidDisplayName, pidEmailAddress, pidSMTPAddress, q.part, warn)
 		if mb.Raw == "" {
+			warn(Warning{Code: WarnRecipientType, Detail: "a recipient with no name or address was skipped", Part: q.part})
 			continue
 		}
 		typ, _ := q.int32(pidRecipientType)
-		switch typ & 0x0FFFFFFF { // high bits are flags (MAPI_P1, MAPI_SUBMITTED)
+		switch t := typ & 0x0FFFFFFF; t { // high bits are flags (MAPI_P1, MAPI_SUBMITTED)
+		case 1:
+			to = append(to, mb)
 		case 2:
 			cc = append(cc, mb)
 		case 3:
 			bcc = append(bcc, mb)
 		default:
+			warn(Warning{Code: WarnRecipientType, Detail: fmt.Sprintf("a recipient of type %d was read as To", t), Part: q.part})
 			to = append(to, mb)
 		}
 	}
@@ -333,7 +381,9 @@ func setRecipients(m *Message, recips []*props) {
 // mapiMailbox builds an address list of one mailbox from a display name, an
 // address of any type (an Exchange "/O=..." DN is kept as written in Raw) and
 // an SMTP address.
-func mapiMailbox(p *props, nameID, emailID, smtpID uint16) AddressList {
+// A mailbox that shows one SMTP address and carries a different one is
+// reported (warn may be nil when only comparing).
+func mapiMailbox(p *props, nameID, emailID, smtpID uint16, part string, warn func(Warning)) AddressList {
 	name, _ := p.str(nameID)
 	email, _ := p.str(emailID)
 	smtp, _ := p.str(smtpID)
@@ -343,6 +393,8 @@ func mapiMailbox(p *props, nameID, emailID, smtpID uint16) AddressList {
 		if strings.Contains(email, "@") && !strings.HasPrefix(email, "/") {
 			addr = email
 		}
+	} else if warn != nil && strings.Contains(email, "@") && !strings.HasPrefix(email, "/") && !strings.EqualFold(email, smtp) {
+		warn(Warning{Code: WarnAddressMismatch, Detail: "a mailbox shows one address and carries a different SMTP address; Address holds the SMTP one, Raw the shown one", Part: part})
 	}
 	shown := email
 	if shown == "" {
@@ -401,10 +453,14 @@ func childIndex(name, prefix string) string {
 // when present, the compressed RTF. Every source present is returned — an
 // attacker can make them differ, and which one a client shows varies.
 func (st *state) propBodies(m *Message, p *props, part string, warn func(Warning)) {
+	bodyCS := firstNonEmpty(p.bodyCharset, p.charset)
 	if b, ok := p.varLoad(uint32(pidBody)<<16 | ptUnicode); ok {
+		for len(b) >= 2 && b[len(b)-1] == 0 && b[len(b)-2] == 0 {
+			b = b[:len(b)-2]
+		}
 		m.Bodies = append(m.Bodies, Body{MediaType: "text/plain", Content: utf16String(b), Charset: "utf-16le", CharsetSource: "unicode", Size: len(b), Part: part + "/body"})
 	} else if b, ok := p.rawString(pidBody); ok {
-		r := decodeText("text/plain", p.charset, "codepage", b, part+"/body", warn)
+		r := decodeText("text/plain", bodyCS, "codepage", b, part+"/body", warn)
 		m.Bodies = append(m.Bodies, Body{MediaType: "text/plain", Content: r.content, Charset: r.charset, CharsetSource: r.source, Size: len(b), Part: part + "/body"})
 	}
 	html, ok := p.binary(pidHTML)
@@ -412,7 +468,7 @@ func (st *state) propBodies(m *Message, p *props, part string, warn func(Warning
 		html, ok = p.rawString(pidHTML)
 	}
 	if ok {
-		r := decodeText("text/html", p.charset, "codepage", trimNUL(html), part+"/html", warn)
+		r := decodeText("text/html", firstNonEmpty(p.htmlCharset, bodyCS), "codepage", trimNUL(html), part+"/html", warn)
 		m.Bodies = append(m.Bodies, Body{MediaType: "text/html", Content: r.content, Charset: r.charset, CharsetSource: r.source, Size: len(html), Part: part + "/html"})
 	}
 	if rtf, ok := p.binary(pidRTFCompressed); ok {
@@ -450,13 +506,11 @@ func (r *msgReader) attachments(m *Message, dir *cfb.Entry, depth int, part, cha
 				warn(Warning{Code: WarnMessageDepthLimit, Detail: fmt.Sprintf("a message nested deeper than %d layers was not opened", r.st.opt.MaxMessageDepth), Part: ap})
 				break
 			}
-			a.Message = r.message(sub, 24, depth+1, ap)
+			a.Message = r.message(sub, 24, depth+1, "msg")
 		case method == attachByValue || !hasMethod:
 			data, ok := q.binary(pidAttachData)
 			if !ok {
-				if hasMethod {
-					warn(Warning{Code: WarnMSGStructure, Detail: "a by-value attachment has no data stream", Part: ap})
-				}
+				warn(Warning{Code: WarnMSGStructure, Detail: "an attachment has no data stream (and no method saying where its bytes are)", Part: ap})
 				break
 			}
 			a.Data, a.Size = data, len(data)

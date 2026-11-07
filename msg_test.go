@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"golang.org/x/text/encoding"
+	"golang.org/x/text/encoding/charmap"
 	"golang.org/x/text/encoding/htmlindex"
 	"golang.org/x/text/encoding/japanese"
 
@@ -75,7 +77,9 @@ func TestMSGWithHeaders(t *testing.T) {
 	if len(m.From) != 1 || m.From[0].Mailboxes[0].Address != "alice@example.com" || m.From[0].Mailboxes[0].Name != "経理部" {
 		t.Fatalf("from %+v", m.From)
 	}
-	if got := codes(m.Warnings); len(got) != 1 || got[WarnAttachmentNotExtracted] != 1 {
+	// The MAPI subject differs on purpose: Outlook shows it, the header says
+	// otherwise, and that is reported.
+	if got := codes(m.Warnings); len(got) != 2 || got[WarnAttachmentNotExtracted] != 1 || got[WarnHeaderMismatch] != 1 {
 		t.Fatalf("warnings %v", m.Warnings)
 	}
 	if len(m.Bodies) != 2 {
@@ -319,4 +323,85 @@ func TestMSGInsideEML(t *testing.T) {
 	if m.Attachments[0].Message != nil || codes(m.Warnings)[WarnNestedUnreadable] != 1 {
 		t.Fatalf("warnings %v", m.Warnings)
 	}
+}
+
+func TestMSGReviewFindings(t *testing.T) {
+	cyr := charmap.Windows1251
+	koi := charmap.KOI8R
+	t.Run("code page per property kind", func(t *testing.T) {
+		b := buildMSG([]mapi{
+			{pidMessageCodepage, uint32(1251)}, {pidInternetCodepage, uint32(20866)},
+			{pidSubject, enc(cyr, "привет мир")}, {pidBody, enc(koi, "тело письма")},
+		})
+		m, _ := ParseBytes(b, Options{})
+		if m.Subject != "привет мир" || m.Bodies[0].Content != "тело письма" || m.Bodies[0].Charset != "koi8-r" {
+			t.Fatalf("subject %q body %+v", m.Subject, m.Bodies)
+		}
+		jp := buildMSG([]mapi{
+			{pidMessageCodepage, uint32(932)}, {pidInternetCodepage, uint32(50220)},
+			{pidSubject, enc(japanese.ShiftJIS, "件名")}, {pidBody, enc(japanese.ISO2022JP, "本文")},
+		})
+		m, _ = ParseBytes(jp, Options{})
+		if m.Subject != "件名" || m.Bodies[0].Content != "本文" || len(m.Warnings) != 1 {
+			t.Fatalf("japanese: %q %+v %v", m.Subject, m.Bodies, m.Warnings)
+		}
+	})
+	t.Run("shown and SMTP addresses differ", func(t *testing.T) {
+		b := buildMSG([]mapi{{pidSentRepName, "CEO"}, {pidSentRepEmail, "attacker@evil.example"}, {pidSentRepSMTP, "ceo@corp.example"}})
+		m, _ := ParseBytes(b, Options{})
+		if codes(m.Warnings)[WarnAddressMismatch] != 1 || m.From[0].Mailboxes[0].Address != "ceo@corp.example" || !strings.Contains(m.From[0].Raw, "attacker@evil.example") {
+			t.Fatalf("%v %+v", m.Warnings, m.From)
+		}
+	})
+	t.Run("MAPI sender differs from the headers", func(t *testing.T) {
+		b := buildMSG([]mapi{{pidTransportHeaders, msgHeaders}, {pidSubject, "Invoice"}, {pidSentRepSMTP, "ceo@corp.example"}})
+		m, _ := ParseBytes(b, Options{})
+		if got := codes(m.Warnings); got[WarnHeaderMismatch] != 1 {
+			t.Fatalf("%v", m.Warnings)
+		}
+	})
+	t.Run("many recipients are not cut", func(t *testing.T) {
+		var rs []*cfbtest.Node
+		for i := range 1100 {
+			rs = append(rs, recip(i, mapi{pidRecipientType, uint32(1)}, mapi{pidSMTPAddress, fmt.Sprintf("r%d@example.org", i)}))
+		}
+		m, err := ParseBytes(buildMSG([]mapi{{pidSubject, "all hands"}}, rs...), Options{})
+		if err != nil || len(m.To) != 1 || len(m.To[0].Mailboxes) != 1100 || codes(m.Warnings)[WarnCFBDamaged] != 0 {
+			t.Fatalf("%v %d %v", err, len(m.To[0].Mailboxes), codes(m.Warnings))
+		}
+	})
+	t.Run("recipient types and empty rows", func(t *testing.T) {
+		b := buildMSG([]mapi{{pidSubject, "x"}},
+			recip(0, mapi{pidRecipientType, uint32(0)}, mapi{pidSMTPAddress, "orig@example.org"}),
+			recip(1, mapi{pidRecipientType, uint32(1)}))
+		m, _ := ParseBytes(b, Options{})
+		if codes(m.Warnings)[WarnRecipientType] != 2 || len(m.To[0].Mailboxes) != 1 {
+			t.Fatalf("%v %+v", m.Warnings, m.To)
+		}
+	})
+	t.Run("attachment with neither method nor data", func(t *testing.T) {
+		m, _ := ParseBytes(buildMSG([]mapi{{pidSubject, "x"}}, attach(0, []mapi{{pidAttachLongFilename, "ghost.pdf"}})), Options{})
+		if codes(m.Warnings)[WarnMSGStructure] != 1 {
+			t.Fatalf("%v", m.Warnings)
+		}
+	})
+	t.Run("embedded message parts and Unicode body size", func(t *testing.T) {
+		m, _ := ParseBytes(sampleMSG(), Options{})
+		if in := m.Attachments[2].Message; in.Bodies[0].Part != "msg/body" {
+			t.Fatalf("part %q", in.Bodies[0].Part)
+		}
+		if m.Bodies[0].Size != 2*len("plain body") {
+			t.Fatalf("size %d", m.Bodies[0].Size)
+		}
+	})
+	t.Run("warnings are capped per code", func(t *testing.T) {
+		var rs []*cfbtest.Node
+		for i := range 300 {
+			rs = append(rs, recip(i, mapi{pidRecipientType, uint32(9)}, mapi{pidSMTPAddress, "x@example.org"}))
+		}
+		m, _ := ParseBytes(buildMSG([]mapi{{pidSubject, "x"}}, rs...), Options{})
+		if got := codes(m.Warnings); got[WarnRecipientType] != maxWarningsPerCode || got[WarnWarningLimit] != 1 {
+			t.Fatalf("%v", got)
+		}
+	})
 }

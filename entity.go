@@ -17,7 +17,7 @@ var singletonFields = []string{"From", "Sender", "Reply-To", "To", "Cc", "Bcc", 
 // parseEML parses one RFC 5322 message at nesting depth depth (0 = top).
 func (st *state) parseEML(b []byte, depth int) *Message {
 	m := &Message{Format: FormatEML, Size: int64(len(b)), Bodies: []Body{}, Attachments: []Attachment{}, Warnings: []Warning{}}
-	warn := func(w Warning) { m.Warnings = append(m.Warnings, w) }
+	warn := warner(m)
 
 	h, body := st.readHeader(b, "", warn)
 	m.Header = h
