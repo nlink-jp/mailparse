@@ -112,11 +112,11 @@ func (st *state) readHeader(b []byte, part string, warn func(Warning)) (Header, 
 		over := (isField && fields >= st.opt.MaxHeaders) || total > st.opt.MaxHeaderBytes || dropped
 		if over && !dropped {
 			dropped = true
-			warn(Warning{Code: WarnHeaderLimit, Detail: fmt.Sprintf("header fields after %d fields / %d bytes were not kept", len(h), st.opt.MaxHeaderBytes), Part: part})
+			warn(Warning{Code: WarnHeaderLimit, Detail: fmt.Sprintf("header content after %d fields / %d bytes was not kept", len(h), st.opt.MaxHeaderBytes), Part: part})
 		}
 		switch {
 		case !isField:
-			if cur != nil {
+			if cur != nil && !over { // past the limit, a long field is cut too
 				curRaw = append(curRaw, '\n')
 				curRaw = append(curRaw, trimmed...)
 			} else if !over {
@@ -187,12 +187,12 @@ func charsetReader(charset string, input io.Reader) (io.Reader, error) {
 func decodeWords(s, what, part string, warn func(Warning)) string {
 	out, err := wordDecoder.DecodeHeader(s)
 	if err == nil && !strings.Contains(out, "=?") {
-		return out
+		return checkDecodedWords(s, out, what, part, warn)
 	}
 	if fixed := repairEncodedWords(s); fixed != s {
 		if out2, err2 := wordDecoder.DecodeHeader(fixed); err2 == nil && !strings.Contains(out2, "=?") {
 			warn(Warning{Code: WarnRepairedEncodedWord, Detail: what + " held an encoded-word broken by whitespace; it was repaired", Part: part})
-			return out2
+			return checkDecodedWords(s, out2, what, part, warn)
 		}
 	}
 	if err != nil {
@@ -200,6 +200,20 @@ func decodeWords(s, what, part string, warn func(Warning)) string {
 		return s
 	}
 	// Decoded what it could; something that looks like an encoded-word remains.
+	return checkDecodedWords(s, out, what, part, warn)
+}
+
+// checkDecodedWords catches what Go's decoder lets through: bytes that are not
+// UTF-8 (a utf-8 word holding invalid bytes comes back as they are) and
+// replacement characters a charset decoder put in for bytes it could not read.
+func checkDecodedWords(in, out, what, part string, warn func(Warning)) string {
+	switch {
+	case !utf8.ValidString(out):
+		warn(Warning{Code: WarnUndecodableWord, Detail: what + " held an encoded-word whose bytes are not valid in its charset; they were replaced", Part: part})
+		return strings.ToValidUTF8(out, "\uFFFD")
+	case strings.Count(out, "\uFFFD") > strings.Count(in, "\uFFFD"):
+		warn(Warning{Code: WarnUndecodableWord, Detail: what + " held an encoded-word whose bytes are not valid in its charset; they were replaced", Part: part})
+	}
 	return out
 }
 

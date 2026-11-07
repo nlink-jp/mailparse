@@ -3,6 +3,7 @@ package mailparse
 import (
 	"net/mail"
 	"strings"
+	"unicode/utf8"
 )
 
 // parseAddressList reads one occurrence of an address field. The address is
@@ -13,6 +14,15 @@ import (
 // has tokenized it, which keeps an injected "<...>" inside the name.
 func parseAddressList(field Field, part string, warn func(Warning)) AddressList {
 	raw := unfold([]byte(field.Raw))
+	// Raw 8-bit bytes (not RFC 2047) are converted before parsing so display
+	// names come out as text; decodeHeaderValue has warned about them.
+	if !utf8.ValidString(raw) {
+		if s, _, ok := guessJapanese([]byte(raw)); ok {
+			raw = s
+		} else {
+			raw = strings.ToValidUTF8(raw, "\uFFFD")
+		}
+	}
 	al := AddressList{Raw: raw, Mailboxes: []Mailbox{}}
 	if raw == "" {
 		al.Parsed = true

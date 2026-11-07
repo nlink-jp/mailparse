@@ -154,16 +154,16 @@ func TestCharsetPaths(t *testing.T) {
 }
 
 func TestSplitMultipartBoundaries(t *testing.T) {
-	parts, closed := splitMultipart([]byte("preamble\r\n--b  \r\nA\r\n--b\r\nB\r\n--b--\r\nepilogue"), "b")
+	parts, closed, _, _ := splitMultipart([]byte("preamble\r\n--b  \r\nA\r\n--b\r\nB\r\n--b--\r\nepilogue"), "b", 100)
 	if !closed || len(parts) != 2 || string(parts[0]) != "A" || string(parts[1]) != "B" {
 		t.Fatalf("parts %q closed %v", parts, closed)
 	}
 	// A line that only starts with the delimiter is content, not a delimiter.
-	parts, _ = splitMultipart([]byte("--b\r\n--bX not a delimiter\r\n--b--\r\n"), "b")
+	parts, _, _, _ = splitMultipart([]byte("--b\r\n--bX not a delimiter\r\n--b--\r\n"), "b", 100)
 	if len(parts) != 1 || string(parts[0]) != "--bX not a delimiter" {
 		t.Fatalf("parts %q", parts)
 	}
-	if parts, closed := splitMultipart([]byte("no delimiters here"), "b"); len(parts) != 0 || closed {
+	if parts, closed, _, _ := splitMultipart([]byte("no delimiters here"), "b", 100); len(parts) != 0 || closed {
 		t.Fatalf("parts %q", parts)
 	}
 }

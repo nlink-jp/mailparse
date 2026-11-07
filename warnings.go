@@ -15,6 +15,9 @@ const (
 	WarnInvalidAddress      = "invalid_address"           // an address field did not parse; a lenient reading was used
 	WarnInvalidDate         = "invalid_date"              // the Date field did not parse; DateRaw keeps it
 	WarnInvalidContentType  = "invalid_content_type"      // Content-Type did not parse; a default was used
+	WarnInvalidParameters   = "invalid_parameters"        // a Content-Type or Content-Disposition parameter was malformed, duplicated or in an undecodable charset; what could be read was kept
+	WarnPartsAfterClose     = "parts_after_close"         // delimiter lines followed a multipart's closing delimiter; the parts after it were read too
+	WarnUnsplitMultipart    = "unsplit_multipart"         // a multipart could not be split (no boundary, no delimiter, too deep); its bytes are returned as one attachment
 	WarnMissingBoundary     = "missing_boundary"          // a multipart had no boundary parameter
 	WarnNoParts             = "no_parts"                  // a multipart had no delimiter at all
 	WarnUnclosedBoundary    = "unclosed_boundary"         // a multipart ended without its closing delimiter

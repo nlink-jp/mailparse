@@ -3,6 +3,7 @@ package mailparse
 import (
 	"bytes"
 	"encoding/binary"
+	"net/mail"
 	"strings"
 )
 
@@ -50,7 +51,15 @@ func Detect(b []byte) Format {
 	return FormatUnknown
 }
 
-var anchorFields = map[string]bool{"from": true, "received": true, "message-id": true, "return-path": true, "date": true}
+// strongFields appear in mail and hardly anywhere else; one of them anchors a
+// header block. Without one, a From holding an address and a Date in RFC 5322
+// form together do. A YAML file with from:/date: keys or an HTTP header dump
+// (Date, Content-Type, Server) has neither.
+var strongFields = map[string]bool{
+	"received": true, "message-id": true, "return-path": true, "dkim-signature": true,
+	"authentication-results": true, "arc-seal": true, "received-spf": true, "delivered-to": true,
+	"x-originating-ip": true, "thread-index": true, "mime-version": true,
+}
 
 var knownFields = map[string]bool{
 	"from": true, "to": true, "cc": true, "bcc": true, "subject": true, "date": true, "message-id": true,
@@ -77,7 +86,7 @@ func looksLikeEML(b []byte) bool {
 	if _, _, ok := splitField(lines[i]); !ok {
 		return false
 	}
-	known, anchor := 0, false
+	known, anchor, fromAddr, mailDate := 0, false, false, false
 	for ; i < len(lines); i++ {
 		l := lines[i]
 		if len(bytes.TrimSpace(l)) == 0 {
@@ -86,7 +95,7 @@ func looksLikeEML(b []byte) bool {
 		if l[0] == ' ' || l[0] == '\t' {
 			continue
 		}
-		name, _, ok := splitField(l)
+		name, value, ok := splitField(l)
 		if !ok {
 			continue
 		}
@@ -94,11 +103,17 @@ func looksLikeEML(b []byte) bool {
 		if knownFields[n] {
 			known++
 		}
-		if anchorFields[n] {
+		switch {
+		case strongFields[n]:
 			anchor = true
+		case n == "from":
+			fromAddr = bytes.Contains(value, []byte("@"))
+		case n == "date":
+			_, err := mail.ParseDate(strings.TrimSpace(string(value)))
+			mailDate = err == nil
 		}
 	}
-	return anchor && known >= 2
+	return (anchor || (fromAddr && mailDate)) && known >= 2
 }
 
 // splitLines splits on LF, dropping a trailing CR from each line.

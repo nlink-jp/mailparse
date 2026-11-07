@@ -86,8 +86,9 @@ type Message struct {
 	To      []AddressList `json:"to,omitempty"`
 	Cc      []AddressList `json:"cc,omitempty"`
 	Bcc     []AddressList `json:"bcc,omitempty"`
-	// ReturnPath is each Return-Path value as written (unfolded).
-	ReturnPath []string `json:"return_path,omitempty"`
+	// ReturnPath holds each Return-Path field, parsed like the address fields;
+	// a null reverse path "<>" (a bounce) has no mailboxes and Parsed true.
+	ReturnPath []AddressList `json:"return_path,omitempty"`
 	// Subject, MessageID and Date come from the first occurrence; the Header
 	// keeps the others, and a duplicate is warned about.
 	Subject   string    `json:"subject,omitempty"`

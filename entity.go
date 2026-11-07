@@ -3,7 +3,6 @@ package mailparse
 import (
 	"bytes"
 	"fmt"
-	"mime"
 	"net/mail"
 	"path"
 	"strconv"
@@ -42,7 +41,7 @@ func (st *state) fillIdentity(m *Message, warn func(Warning)) {
 		case "bcc":
 			m.Bcc = append(m.Bcc, parseAddressList(f, "", warn))
 		case "return-path":
-			m.ReturnPath = append(m.ReturnPath, unfold([]byte(f.Raw)))
+			m.ReturnPath = append(m.ReturnPath, returnPath(f, warn))
 		}
 	}
 	if f, ok := m.Header.First("Subject"); ok {
@@ -64,6 +63,15 @@ func (st *state) fillIdentity(m *Message, warn func(Warning)) {
 			warn(Warning{Code: WarnDuplicateField, Detail: fmt.Sprintf("%s appears %d times; every occurrence is kept", name, n)})
 		}
 	}
+}
+
+// returnPath reads a Return-Path value: one address in angle brackets, or "<>"
+// for a null reverse path (a bounce), which is valid and holds no mailbox.
+func returnPath(f Field, warn func(Warning)) AddressList {
+	if v := strings.TrimSpace(unfold([]byte(f.Raw))); v == "<>" {
+		return AddressList{Raw: v, Mailboxes: []Mailbox{}, Parsed: true}
+	}
+	return parseAddressList(f, "", warn)
 }
 
 // childPath names the i-th (1-based) child of parent.
@@ -89,6 +97,11 @@ func (st *state) entity(m *Message, h Header, body []byte, p string, mimeDepth, 
 		return node
 	}
 
+	for _, name := range []string{"Content-Type", "Content-Transfer-Encoding", "Content-Disposition"} {
+		if n := len(h.All(name)); n > 1 {
+			warn(Warning{Code: WarnDuplicateField, Detail: fmt.Sprintf("%s appears %d times in one entity; the first was used", name, n), Part: p})
+		}
+	}
 	mediaType, params := st.contentType(h, p, defaultType, warn)
 	node.MediaType, node.Params = mediaType, params
 	cte := ""
@@ -98,15 +111,22 @@ func (st *state) entity(m *Message, h Header, body []byte, p string, mimeDepth, 
 	node.TransferEncoding = cte
 	disp, dparams := "", map[string]string{}
 	if f, ok := h.First("Content-Disposition"); ok {
-		if d, dp, err := mime.ParseMediaType(f.Value); err == nil || d != "" {
-			disp, dparams = strings.ToLower(d), dp
+		d, dp, problems := parseParams(f.Value)
+		for _, pr := range problems {
+			warn(Warning{Code: WarnInvalidParameters, Detail: "Content-Disposition: " + pr, Part: p})
 		}
+		disp, dparams = d, dp
 	}
 	node.Disposition = disp
 
 	switch {
 	case strings.HasPrefix(mediaType, "multipart/"):
-		st.multipart(m, node, params, body, p, mimeDepth, msgDepth, warn)
+		if !st.multipart(m, node, params, body, p, mimeDepth, msgDepth, warn) {
+			// Not split: a lenient client may still show it, so its bytes are
+			// returned rather than dropped.
+			data := st.budgeted(body, p, warn)
+			m.Attachments = append(m.Attachments, st.attachment(h, mediaType, disp, "", data, p))
+		}
 		return node
 	case mediaType == "message/rfc822" || mediaType == "message/global":
 		data := st.budgeted(decodeTransfer(cte, body, p, warn), p, warn)
@@ -150,34 +170,41 @@ func (st *state) contentType(h Header, p, defaultType string, warn func(Warning)
 		}
 		return "text/plain", map[string]string{}
 	}
-	mt, params, err := mime.ParseMediaType(f.Value)
-	if err != nil && mt == "" {
+	mt, params, problems := parseParams(f.Value)
+	for _, pr := range problems {
+		warn(Warning{Code: WarnInvalidParameters, Detail: "Content-Type: " + pr, Part: p})
+	}
+	if t, sub, ok := strings.Cut(mt, "/"); !ok || t == "" || sub == "" || strings.ContainsAny(mt, " \t\"") {
 		warn(Warning{Code: WarnInvalidContentType, Detail: "Content-Type did not parse; application/octet-stream was assumed", Part: p})
-		return "application/octet-stream", map[string]string{}
+		return "application/octet-stream", params
 	}
-	if params == nil {
-		params = map[string]string{}
-	}
-	return strings.ToLower(mt), params
+	return mt, params
 }
 
-func (st *state) multipart(m *Message, node *Part, params map[string]string, body []byte, p string, mimeDepth, msgDepth int, warn func(Warning)) {
+// multipart splits and reads a multipart entity. It returns false when the
+// content could not be split at all; the caller then keeps the bytes.
+func (st *state) multipart(m *Message, node *Part, params map[string]string, body []byte, p string, mimeDepth, msgDepth int, warn func(Warning)) bool {
 	if mimeDepth >= st.opt.MaxMIMEDepth {
-		warn(Warning{Code: WarnMIMEDepthLimit, Detail: fmt.Sprintf("a multipart deeper than %d levels was not opened", st.opt.MaxMIMEDepth), Part: p})
-		return
+		warn(Warning{Code: WarnMIMEDepthLimit, Detail: fmt.Sprintf("a multipart deeper than %d levels was not opened; its bytes are kept as one attachment", st.opt.MaxMIMEDepth), Part: p})
+		return false
 	}
 	boundary := params["boundary"]
 	if boundary == "" {
-		warn(Warning{Code: WarnMissingBoundary, Detail: "a multipart has no boundary parameter; its content was not split", Part: p})
-		return
+		warn(Warning{Code: WarnMissingBoundary, Detail: "a multipart has no boundary parameter; its bytes are kept as one attachment", Part: p})
+		return false
 	}
-	parts, closed := splitMultipart(body, boundary)
+	// Collect no more parts than the part budget can still read: an input of
+	// nothing but delimiter lines must not allocate a slice per line.
+	parts, closed, afterClose, cut := splitMultipart(body, boundary, max(st.opt.MaxParts-st.parts, 0)+1)
 	if len(parts) == 0 {
-		warn(Warning{Code: WarnNoParts, Detail: "a multipart has no delimiter line for its boundary", Part: p})
-		return
+		warn(Warning{Code: WarnNoParts, Detail: "a multipart has no delimiter line for its boundary; its bytes are kept as one attachment", Part: p})
+		return false
 	}
-	if !closed {
+	if !closed && !cut {
 		warn(Warning{Code: WarnUnclosedBoundary, Detail: "a multipart ended without its closing delimiter; the parts read so far are kept", Part: p})
+	}
+	if afterClose {
+		warn(Warning{Code: WarnPartsAfterClose, Detail: "delimiter lines follow the closing delimiter; the parts after it were read too", Part: p})
 	}
 	childDefault := ""
 	if node.MediaType == "multipart/digest" {
@@ -188,19 +215,25 @@ func (st *state) multipart(m *Message, node *Part, params map[string]string, bod
 		ph, pbody := st.readHeader(raw, cp, warn)
 		child := st.entity(m, ph, pbody, cp, mimeDepth+1, msgDepth, childDefault, warn)
 		node.Children = append(node.Children, child)
-		if st.parts > st.opt.MaxParts {
-			return
+		if st.parts >= st.opt.MaxParts && (i < len(parts)-1 || cut) {
+			// Said here as well: the cut may have happened inside a nested
+			// message, whose warning this message does not carry.
+			warn(Warning{Code: WarnPartLimit, Detail: fmt.Sprintf("parts after the first %d in all were not read", st.opt.MaxParts), Part: p})
+			return true
 		}
 	}
+	return true
 }
 
 // splitMultipart splits a multipart body on its delimiter lines ("--boundary",
 // transport padding allowed) and reports whether the closing delimiter
 // ("--boundary--") came. The line break before a delimiter belongs to the
-// delimiter. Preamble and epilogue are dropped.
-func splitMultipart(body []byte, boundary string) ([][]byte, bool) {
+// delimiter. The preamble is dropped, as RFC 2046 says; after the closing
+// delimiter, further delimiter lines start parts again (some clients show
+// them) and afterClose says so. At most limit parts are collected; cut says
+// more followed.
+func splitMultipart(body []byte, boundary string, limit int) (parts [][]byte, closed, afterClose, cut bool) {
 	delim := []byte("--" + boundary)
-	var parts [][]byte
 	start := -1 // start of the current part's content, -1 before the first delimiter
 	pos := 0
 	for pos <= len(body) {
@@ -227,12 +260,19 @@ func splitMultipart(body []byte, boundary string) ([][]byte, bool) {
 							end--
 						}
 					}
+					if len(parts) == limit {
+						return parts, closed, afterClose, true
+					}
 					parts = append(parts, body[start:end])
 				}
 				if closing {
-					return parts, true
+					closed, start = true, -1
+				} else {
+					if closed {
+						afterClose = true
+					}
+					start = min(next, len(body))
 				}
-				start = min(next, len(body))
 			}
 		}
 		if lineEnd < 0 {
@@ -241,9 +281,15 @@ func splitMultipart(body []byte, boundary string) ([][]byte, bool) {
 		pos = next
 	}
 	if start >= 0 && start <= len(body) {
+		if len(parts) == limit {
+			return parts, closed, afterClose, true
+		}
 		parts = append(parts, body[start:])
+		if closed {
+			closed = false // the parts after the close were not closed again
+		}
 	}
-	return parts, false
+	return parts, closed, afterClose, false
 }
 
 // budgeted charges decoded bytes against the shared MaxDecoded and cuts what
