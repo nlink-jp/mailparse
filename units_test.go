@@ -205,3 +205,15 @@ func TestSafeToken(t *testing.T) {
 		t.Errorf("not capped: %q", got)
 	}
 }
+
+func TestUndeclaredISO2022JP(t *testing.T) {
+	jis := "\x1b$B$3$s$K$A$O\x1b(B" // こんにちは in ISO-2022-JP: every byte is 7-bit
+	var ws []Warning
+	r := toUTF8("text/plain", "", []byte(jis), "1", func(w Warning) { ws = append(ws, w) })
+	if r.content != "こんにちは" || r.charset != "iso-2022-jp" || r.source != "guessed" || len(ws) != 1 || ws[0].Code != WarnCharsetGuessed {
+		t.Fatalf("got %+v, warnings %v", r, ws)
+	}
+	if r := toUTF8("text/plain", "", []byte("plain ascii"), "1", func(Warning) { t.Fatal("warned on ascii") }); r.charset != "us-ascii" {
+		t.Fatalf("ascii: %+v", r)
+	}
+}

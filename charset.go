@@ -81,26 +81,41 @@ type textResult struct {
 // <meta charset>; otherwise undeclared non-ASCII is guessed. Every fallback is
 // warned about.
 func toUTF8(mediaType, declared string, data []byte, part string, warn func(Warning)) textResult {
+	return decodeText(mediaType, declared, "mime", data, part, warn)
+}
+
+// decodeText is toUTF8 with the origin of the declared charset named: "mime"
+// for a MIME charset parameter, "codepage" for a .msg or TNEF code page, "rtf"
+// for an RTF \ansicpg or \fcharset.
+func decodeText(mediaType, declared, source string, data []byte, part string, warn func(Warning)) textResult {
 	ascii := isASCII(data)
 	if d := normalizeCharset(declared); d != "" {
 		switch d {
 		case "us-ascii", "utf-8":
 			if ascii || (d == "utf-8" && utf8.Valid(data)) {
-				return textResult{string(data), d, "mime"}
+				return textResult{string(data), d, source}
 			}
 			warn(Warning{Code: WarnCharsetMismatch, Detail: "the declared " + d + " does not fit the bytes; the charset was guessed", Part: part})
 		default:
 			if enc, err := htmlindex.Get(d); err == nil {
 				if s, ok := decodeStrict(enc, data); ok {
-					return textResult{s, d, "mime"}
+					return textResult{s, d, source}
 				}
 				warn(Warning{Code: WarnCharsetMismatch, Detail: "the declared " + safeToken(d) + " does not fit the bytes; the charset was guessed", Part: part})
 			} else {
 				warn(Warning{Code: WarnUnknownCharset, Detail: "the declared charset " + safeToken(d) + " is not known; the charset was guessed", Part: part})
 			}
 		}
-	} else if ascii {
+	} else if ascii && !hasJISEscape(data) {
 		return textResult{string(data), "us-ascii", "default"}
+	}
+	// ISO-2022-JP is 7-bit: undeclared, it passes for ASCII and for UTF-8, so
+	// its escape sequences are tried before either.
+	if declared == "" && hasJISEscape(data) {
+		if s, ok := decodeStrict(japanese.ISO2022JP, data); ok {
+			warn(Warning{Code: WarnCharsetGuessed, Detail: "no charset was declared; the text was read as iso-2022-jp", Part: part})
+			return textResult{s, "iso-2022-jp", "guessed"}
+		}
 	}
 	if mediaType == "text/html" {
 		if m := metaCharset(data); m != "" {

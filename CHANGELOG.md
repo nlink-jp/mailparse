@@ -19,3 +19,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   for undeclared Japanese; nested messages (message/rfc822 and messages
   recognized by content); limits shared across one parse; a Warning for every
   repair, guess, skip or cut; a fuzz target.
+
+### Fixed
+
+- Undeclared ISO-2022-JP text, being 7-bit, was taken for US-ASCII; its escape
+  sequences are now recognized and the guess is reported.
