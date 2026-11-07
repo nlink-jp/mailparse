@@ -85,6 +85,8 @@ func TNEFProps(props ...TNEFProp) []byte {
 			}
 		case uint32:
 			out = append(out, u32le(v)...)
+		case int:
+			out = append(out, u32le(int32Bits(v))...)
 		case uint16:
 			out = append(out, pad4(binary.LittleEndian.AppendUint16(nil, v))...)
 		case bool:

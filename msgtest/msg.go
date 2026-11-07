@@ -123,7 +123,7 @@ func Object(header int, props []Prop, extra ...*Node) []*Node {
 			binary.LittleEndian.PutUint32(val[:], v)
 		case int:
 			typ = PtypInteger32
-			binary.LittleEndian.PutUint32(val[:], uint32(v))
+			binary.LittleEndian.PutUint32(val[:], int32Bits(v))
 		case bool:
 			typ = PtypBoolean
 			if v {
@@ -172,4 +172,13 @@ func Embedded(props []Prop, extra ...*Node) *Node {
 func Message(props []Prop, extra ...*Node) []byte {
 	b, _ := Build(3, Object(HeaderTopLevel, props, extra...)...)
 	return b
+}
+
+// int32Bits returns an int as the bits of a PtypInteger32, panicking when it
+// does not fit (a fixture with an out-of-range value is a test bug).
+func int32Bits(v int) uint32 {
+	if v < -1<<31 || v > 1<<32-1 {
+		panic(fmt.Sprintf("msgtest: %d does not fit a 32-bit property", v))
+	}
+	return uint32(v)
 }

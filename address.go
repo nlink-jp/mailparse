@@ -141,39 +141,98 @@ func lenientMailbox(item, fieldName, part string, warn func(Warning)) (Mailbox, 
 	return Mailbox{Name: displayName(item, fieldName, part, warn)}, true
 }
 
-// displayName reads a display name: a quoted-string is unquoted (quoted-pairs
-// undone), and RFC 2047 words outside quotes are decoded.
+// displayName reads a display name: quoted-strings are unquoted (quoted-pairs
+// undone) and joined with the words around them, as net/mail does; RFC 2047
+// words outside quotes are decoded.
 func displayName(s, fieldName, part string, warn func(Warning)) string {
 	s = strings.TrimSpace(s)
-	if strings.HasPrefix(s, `"`) {
-		return unquoteParam(s)
+	if !strings.Contains(s, `"`) {
+		if strings.Contains(s, "=?") {
+			return decodeWords(s, "a display name in "+safeToken(fieldName), part, warn)
+		}
+		return s
 	}
-	if strings.Contains(s, "=?") {
-		return decodeWords(s, "a display name in "+safeToken(fieldName), part, warn)
+	var words []string
+	for rest := s; rest != ""; rest = strings.TrimSpace(rest) {
+		if rest[0] == '"' {
+			end := closingQuote(rest)
+			if end < 0 { // unclosed: the quote is literal text
+				words = append(words, rest)
+				break
+			}
+			words = append(words, unquoteParam(rest[:end+1]))
+			rest = rest[end+1:]
+			continue
+		}
+		q := strings.IndexByte(rest, '"')
+		if q < 0 {
+			q = len(rest)
+		}
+		words = append(words, strings.TrimSpace(rest[:q]))
+		rest = rest[q:]
 	}
-	return s
+	return strings.Join(words, " ")
+}
+
+// closingQuote returns the index of the quote closing the quoted-string that
+// starts s, or -1.
+func closingQuote(s string) int {
+	for i := 1; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			i++
+		case '"':
+			return i
+		}
+	}
+	return -1
 }
 
 // outsideQuotes returns s, byte for byte, with every byte inside a
-// quoted-string (quotes included) replaced by '_', so its structure can be
-// searched without matching what a display name holds.
+// quoted-string or a comment (delimiters included) replaced by '_', so its
+// structure can be searched without matching display text. A quote or
+// parenthesis that never closes is literal: the bytes after it are not masked.
 func outsideQuotes(s string) string {
 	b := []byte(s)
 	quoted, escaped := false, false
-	for i, c := range b {
+	depth, start := 0, -1
+	for i := 0; i < len(b); i++ {
+		c := b[i]
 		switch {
 		case escaped:
 			escaped = false
-			b[i] = '_'
-		case quoted && c == '\\':
+		case (quoted || depth > 0) && c == '\\':
 			escaped = true
-			b[i] = '_'
-		case c == '"':
-			quoted = !quoted
-			b[i] = '_'
-		case quoted:
-			b[i] = '_'
+		case !quoted && c == '(':
+			if depth == 0 {
+				start = i
+			}
+			depth++
+		case !quoted && depth > 0 && c == ')':
+			depth--
+			if depth == 0 {
+				for k := start; k <= i; k++ {
+					b[k] = '_'
+				}
+			}
+			continue
+		case depth == 0 && c == '"':
+			if !quoted {
+				start = i
+				quoted = true
+				continue
+			}
+			quoted = false
+			for k := start; k <= i; k++ {
+				b[k] = '_'
+			}
+			continue
 		}
+	}
+	if quoted || depth > 0 {
+		// Unclosed: treat the opening delimiter as text and mask what follows
+		// it on its own terms.
+		return string(b[:start+1]) + outsideQuotes(string(b[start+1:]))
 	}
 	return string(b)
 }

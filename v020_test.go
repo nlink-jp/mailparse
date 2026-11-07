@@ -109,7 +109,7 @@ func TestMailboxString(t *testing.T) {
 		{Mailbox{"Taro Yamada", "taro@corp.example"}, `Taro Yamada <taro@corp.example>`},
 		{Mailbox{"山田 太郎", "taro@corp.example"}, `山田 太郎 <taro@corp.example>`},
 		{Mailbox{`say "hi" \o/`, "a@example.com"}, `"say \"hi\" \\o/" <a@example.com>`},
-		{Mailbox{"line\r\nbreak", "a@example.com"}, `line  break <a@example.com>`}, // control characters become spaces
+		{Mailbox{"line\r\nbreak", "a@example.com"}, `"line  break" <a@example.com>`}, // control characters become spaces; a double space is quoted
 		{Mailbox{"tab\t<x@y>", "a@example.com"}, `"tab <x@y>" <a@example.com>`},
 		{Mailbox{"", "a@example.com"}, `a@example.com`},
 		{Mailbox{"broken <<x", ""}, `"broken <<x"`},
@@ -305,5 +305,90 @@ func TestLenientQuotedName(t *testing.T) {
 	al := parseAddressList(Field{Name: "From", Raw: `"CEO <ceo@corp.example>"`}, "", func(Warning) {})
 	if len(al.Mailboxes) != 1 || al.Mailboxes[0].Address != "" || al.Mailboxes[0].Name != "CEO <ceo@corp.example>" {
 		t.Fatalf("%+v", al)
+	}
+}
+
+// Findings of the second review round.
+func TestMailboxStringRound2(t *testing.T) {
+	reparse := func(s string) AddressList {
+		return parseAddressList(Field{Name: "From", Raw: s}, "", func(Warning) {})
+	}
+	same := func(mb Mailbox) {
+		t.Helper()
+		al := reparse(mb.String())
+		if len(al.Mailboxes) != 1 || al.Mailboxes[0] != mb {
+			t.Errorf("%+v -> %s -> %+v", mb, mb.String(), al.Mailboxes)
+		}
+	}
+	noAddress := func(mb Mailbox) {
+		t.Helper()
+		for _, m := range reparse(mb.String()).Mailboxes {
+			if m.Address != "" {
+				t.Errorf("%+v -> %s gave address %q", mb, mb.String(), m.Address)
+			}
+		}
+	}
+	same(Mailbox{"", "a@[192.0.2.1]"})
+	same(Mailbox{"N", "a@[IPv6:2001:db8::1]"})
+	for _, lit := range []string{"a@[x,y]", "a@[x>,y]", "a@[x<y]", `a@["x]`, "a@[2001:db8::1]"} {
+		noAddress(Mailbox{"N", lit})
+	}
+	same(Mailbox{"", "\u3000ceo@corp.example"})
+	same(Mailbox{"N", "ceo\u00a0@corp.example"})
+	noAddress(Mailbox{"N", "ceo@corp.example\u3000"})
+}
+
+func TestLenientRound2(t *testing.T) {
+	read := func(raw string) []Mailbox {
+		return parseAddressList(Field{Name: "From", Raw: raw}, "", func(Warning) {}).Mailboxes
+	}
+	for _, c := range []struct{ raw, addr string }{
+		{`"Bob <bob@x.example>`, "bob@x.example"},
+		{`Bob" <bob@x.example>`, "bob@x.example"},
+		{`"Ab\" <a@b>`, "a@b"},
+		{`Real Name (ceo@corp.example) real@x.example`, "real@x.example"},
+	} {
+		got := read(c.raw)
+		if len(got) == 0 || got[len(got)-1].Address != c.addr {
+			t.Errorf("%s: %+v", c.raw, got)
+		}
+	}
+	if got := read(`"CEO" (ceo@corp.example)`); len(got) != 1 || got[0].Address != "" {
+		t.Errorf("address taken from a comment: %+v", got)
+	}
+	if got := read(`"Foo" Bar <x@y.example>, ,broken`); got[0].Name != "Foo Bar" || got[0].Address != "x@y.example" {
+		t.Errorf("text after a quoted part: %+v", got)
+	}
+}
+
+// A random round trip: whatever String writes reads back as the same mailbox,
+// or with no address when String could not write one.
+func TestMailboxStringFuzz(t *testing.T) {
+	alphabet := []rune("ab@.<>,;:()[]" + `"` + `\` + " =?\t\u3000\u00a0\u202e\uff20x")
+	seed := uint32(1)
+	next := func(n int) int { seed = seed*1664525 + 1013904223; return int(seed>>8) % n }
+	word := func() string {
+		r := make([]rune, next(8))
+		for i := range r {
+			r[i] = alphabet[next(len(alphabet))]
+		}
+		return string(r)
+	}
+	for range 20000 {
+		mb := Mailbox{Name: word(), Address: word() + "@" + []string{"x.example", "[192.0.2.1]", word()}[next(3)]}
+		s := mb.String()
+		al := parseAddressList(Field{Name: "From", Raw: s}, "", func(Warning) {})
+		addrs := 0
+		for _, m := range al.Mailboxes {
+			if m.Address != "" {
+				addrs++
+				if m.Address != mb.Address {
+					t.Fatalf("%q -> %s -> %+v", mb, s, al.Mailboxes)
+				}
+			}
+		}
+		if addrs > 1 {
+			t.Fatalf("%q -> %s -> %d addresses", mb, s, addrs)
+		}
 	}
 }

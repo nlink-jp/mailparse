@@ -476,10 +476,13 @@ func mapiMailbox(p *props, nameID, emailID, smtpID uint16, part string, warn fun
 		if strings.Contains(email, "@") && !strings.HasPrefix(email, "/") {
 			addr = email
 		}
-	} else if _, ok := addrSpec(smtp); !ok && warn != nil {
-		warn(Warning{Code: WarnInvalidAddress, Detail: "an SMTP address property is not a valid address; it is kept as written", Part: part})
-	} else if warn != nil && strings.Contains(email, "@") && !strings.HasPrefix(email, "/") && !strings.EqualFold(email, smtp) {
-		warn(Warning{Code: WarnAddressMismatch, Detail: "a mailbox shows one address and carries a different SMTP address; Address holds the SMTP one, Raw the shown one", Part: part})
+	} else if warn != nil {
+		if _, ok := addrSpec(smtp); !ok {
+			warn(Warning{Code: WarnInvalidAddress, Detail: "an SMTP address property is not a valid address; it is kept as written", Part: part})
+		}
+		if strings.Contains(email, "@") && !strings.HasPrefix(email, "/") && !strings.EqualFold(email, smtp) {
+			warn(Warning{Code: WarnAddressMismatch, Detail: "a mailbox shows one address and carries a different SMTP address; Address holds the SMTP one, Raw the shown one", Part: part})
+		}
 	}
 	shown := email
 	if shown == "" {

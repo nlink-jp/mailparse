@@ -47,6 +47,12 @@ and their workarounds.
   that is no address is warned about. `charset=utf-16` with either byte order
   mark is not a mismatch. A UTF-8 byte order mark before an .eml's header is
   skipped (`leading_bom`); it used to swallow the first field.
+- From a second review round: `Mailbox.String` accepts only IP domain
+  literals (as net/mail does) and treats Unicode whitespace as needing quotes
+  in a local part and as invalid in a domain; a double space in a name is
+  quoted. The lenient reading masks comments as well as quoted strings, treats
+  a quote or parenthesis that never closes as text (so the address after it is
+  found again), and keeps the words after a quoted part of a name.
 
 ### Changed
 

@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // Format is what Detect recognized.
@@ -148,7 +150,9 @@ type Mailbox struct {
 // literal, control characters) is not written as an address: it goes into the
 // quoted display text instead. A mailbox with no address is its quoted name
 // alone — display text with no address in it, never "<>". Control characters
-// and line separators in a name become spaces.
+// and line separators in a name become spaces. A quoted name holding an RFC
+// 2047 word stays a name, but a reader that decodes words inside quotes
+// (mailparse among them) shows it decoded.
 func (mb Mailbox) String() string {
 	addr, ok := addrSpec(mb.Address)
 	switch {
@@ -180,7 +184,14 @@ func addrSpec(a string) (string, bool) {
 	}
 	switch {
 	case strings.HasPrefix(domain, "[") && strings.HasSuffix(domain, "]"):
-		if strings.ContainsAny(domain[1:len(domain)-1], "[]\\ ") {
+		// Only IP literals, as net/mail accepts: anything else in brackets
+		// can hold the specials that split an address list.
+		lit := domain[1 : len(domain)-1]
+		if v6, ok := strings.CutPrefix(lit, "IPv6:"); ok {
+			if ip := net.ParseIP(v6); ip == nil || ip.To4() != nil {
+				return "", false
+			}
+		} else if ip := net.ParseIP(lit); ip == nil || ip.To4() == nil {
 			return "", false
 		}
 	case !isDotAtom(domain):
@@ -192,8 +203,13 @@ func addrSpec(a string) (string, bool) {
 	return local + "@" + domain, true
 }
 
+// isAtext reports RFC 5322 atext, with non-ASCII allowed (RFC 6532) except
+// whitespace and format characters, which a reader may trim or not show.
 func isAtext(r rune) bool {
-	return r >= 0x80 || ('a' <= r && r <= 'z') || ('A' <= r && r <= 'Z') || ('0' <= r && r <= '9') ||
+	if r >= 0x80 {
+		return !unicode.IsSpace(r) && !unicode.Is(unicode.Cf, r)
+	}
+	return ('a' <= r && r <= 'z') || ('A' <= r && r <= 'Z') || ('0' <= r && r <= '9') ||
 		strings.ContainsRune("!#$%&'*+-/=?^_`{|}~", r)
 }
 
@@ -227,7 +243,7 @@ func cleanName(name string) string {
 // atoms (RFC 6532 non-ASCII included) and single spaces, else a quoted-string.
 func quoteName(name string) string {
 	name = cleanName(name)
-	plain := name != "" && strings.TrimSpace(name) == name && !strings.Contains(name, "=?")
+	plain := name != "" && strings.TrimSpace(name) == name && !strings.Contains(name, "=?") && !strings.Contains(name, "  ")
 	for _, r := range name {
 		if r != ' ' && !isAtext(r) {
 			plain = false
