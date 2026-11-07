@@ -386,21 +386,38 @@ func applyRecipients(m *Message, p *props, recips []*props, haveHeaders bool, pa
 	if len(m.Bcc) == 0 && len(bcc) > 0 {
 		m.Bcc = joinLists(bcc)
 		warn(Warning{Code: WarnBccFromMAPI, Detail: "the headers carry no Bcc; Bcc was taken from the MAPI recipient table", Part: part})
+	} else if missingFrom(m.Bcc, bcc) {
+		warn(Warning{Code: WarnHeaderMismatch, Detail: "the MAPI recipient table holds a Bcc address the Bcc header does not", Part: part})
 	}
-	inHeaders := map[string]bool{}
-	for _, l := range append(append([]AddressList{}, m.To...), m.Cc...) {
-		for _, mb := range l.Mailboxes {
-			inHeaders[strings.ToLower(mb.Address)] = true
-		}
+	if missingFrom(append(append([]AddressList{}, m.To...), m.Cc...), append(to, cc...)) {
+		warn(Warning{Code: WarnHeaderMismatch, Detail: "the MAPI recipient table holds a To or Cc address the headers do not", Part: part})
 	}
-	for _, l := range append(to, cc...) {
+	for _, l := range append(append(to, cc...), bcc...) {
 		for _, mb := range l.Mailboxes {
-			if mb.Address != "" && !inHeaders[strings.ToLower(mb.Address)] {
-				warn(Warning{Code: WarnHeaderMismatch, Detail: "the MAPI recipient table holds a To or Cc address the headers do not", Part: part})
+			if mb.Address == "" {
+				warn(Warning{Code: WarnHeaderMismatch, Detail: "the MAPI recipient table holds a recipient with no SMTP address (an Exchange DN); it cannot be compared with the headers", Part: part})
 				return
 			}
 		}
 	}
+}
+
+// missingFrom reports whether table holds an address that headers do not.
+func missingFrom(headers, table []AddressList) bool {
+	in := map[string]bool{}
+	for _, l := range headers {
+		for _, mb := range l.Mailboxes {
+			in[strings.ToLower(mb.Address)] = true
+		}
+	}
+	for _, l := range table {
+		for _, mb := range l.Mailboxes {
+			if mb.Address != "" && !in[strings.ToLower(mb.Address)] {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // displayList reads a PidTagDisplayTo/Cc/Bcc value: display names separated
@@ -459,6 +476,8 @@ func mapiMailbox(p *props, nameID, emailID, smtpID uint16, part string, warn fun
 		if strings.Contains(email, "@") && !strings.HasPrefix(email, "/") {
 			addr = email
 		}
+	} else if _, ok := addrSpec(smtp); !ok && warn != nil {
+		warn(Warning{Code: WarnInvalidAddress, Detail: "an SMTP address property is not a valid address; it is kept as written", Part: part})
 	} else if warn != nil && strings.Contains(email, "@") && !strings.HasPrefix(email, "/") && !strings.EqualFold(email, smtp) {
 		warn(Warning{Code: WarnAddressMismatch, Detail: "a mailbox shows one address and carries a different SMTP address; Address holds the SMTP one, Raw the shown one", Part: part})
 	}

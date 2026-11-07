@@ -217,7 +217,7 @@ func decodeBOM(declared string, data []byte, part string, warn func(Warning)) (t
 		if !bytes.HasPrefix(data, b.mark) {
 			continue
 		}
-		if d := normalizeCharset(declared); d != "" && d != b.charset && (d != "us-ascii" || b.charset != "utf-8") {
+		if d := normalizeCharset(declared); d != "" && !bomAgrees(d, b.charset) {
 			warn(Warning{Code: WarnCharsetMismatch, Detail: "the declared " + safeToken(d) + " disagrees with the byte order mark; " + b.charset + " was used", Part: part})
 		}
 		rest := data[len(b.mark):]
@@ -236,4 +236,19 @@ func decodeBOM(declared string, data []byte, part string, warn func(Warning)) (t
 		return textResult{strings.ToValidUTF8(string(s), "\uFFFD"), b.charset, "bom"}, true
 	}
 	return textResult{}, false
+}
+
+// bomAgrees reports whether a declared charset agrees with the charset a byte
+// order mark names: "utf-16" (RFC 2781) and its aliases name either byte order,
+// and US-ASCII is a subset of UTF-8.
+func bomAgrees(declared, bom string) bool {
+	switch declared {
+	case bom:
+		return true
+	case "us-ascii":
+		return bom == "utf-8"
+	case "utf-16", "unicode", "ucs-2", "iso-10646-ucs-2", "csunicode":
+		return bom == "utf-16le" || bom == "utf-16be"
+	}
+	return false
 }

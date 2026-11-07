@@ -36,8 +36,22 @@ and their workarounds.
   it (`bcc_from_mapi`) and a table address missing from To/Cc is reported
   (`mapi_header_mismatch`) (#4).
 
+- From the pre-release review of these changes: `Mailbox.String` quotes a
+  local part that is not a dot-atom and never writes something that is no
+  addr-spec as an address (a list or a line break hidden in an address could
+  otherwise become several mailboxes or a header); name-only mailboxes are
+  always quoted; names holding `=?`, C1 controls or line separators are
+  handled. The lenient address reading no longer finds `<` or `@` inside a
+  quoted display name. A Bcc header that disagrees with the recipient table,
+  and table recipients with only an Exchange DN, are reported; an SMTP property
+  that is no address is warned about. `charset=utf-16` with either byte order
+  mark is not a mismatch. A UTF-8 byte order mark before an .eml's header is
+  skipped (`leading_bom`); it used to swallow the first field.
+
 ### Changed
 
+- msgtest's attachment-method and recipient-type constants are `uint32`, and
+  `Prop` accepts an `int` for PtypInteger32.
 - `DefaultMaxSize` is 64 MiB (was 30 MiB): a 25 MB attachment is about 34 MB in
   Base64, and two consumers had raised it themselves.
 - Documented: Detect's refusals, `Field.Value` folding whitespace, an empty

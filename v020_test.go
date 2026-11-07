@@ -207,3 +207,103 @@ func TestWalkAndOrigin(t *testing.T) {
 		t.Fatalf("%+v", tn.Bodies)
 	}
 }
+
+// Findings of the v0.2.0 review.
+func TestMailboxStringRoundTrip(t *testing.T) {
+	reparse := func(s string) AddressList {
+		return parseAddressList(Field{Name: "From", Raw: s}, "", func(Warning) {})
+	}
+	// A quoted local part holding a list stays one mailbox.
+	mb := Mailbox{"", `a@b.example, Bank <security@bank.example>, c@d.example`}
+	got := mb.String()
+	al := reparse(got)
+	if len(al.Mailboxes) != 1 || al.Mailboxes[0].Address != mb.Address {
+		t.Fatalf("%s -> %+v", got, al)
+	}
+	// A local part full of structure is quoted: still one mailbox, the same address.
+	odd := Mailbox{"Name", "taro@corp.example>, Bank <security@bank.example"}
+	if al := reparse(odd.String()); len(al.Mailboxes) != 1 || al.Mailboxes[0] != odd {
+		t.Fatalf("%s -> %+v", odd.String(), al)
+	}
+	// An address that is no addr-spec is not written as one.
+	for _, bad := range []string{"x@evil.example\r\nBcc: y@evil.example", "x@exa mple.com", "x@evil.example>"} {
+		s := (Mailbox{"Name", bad}).String()
+		if strings.ContainsAny(s, "\r\n") {
+			t.Fatalf("raw line break in %q", s)
+		}
+		for _, m := range reparse(s).Mailboxes {
+			if m.Address != "" {
+				t.Fatalf("%q reparsed to an address %+v", s, m)
+			}
+		}
+	}
+	// A name-only mailbox is display text: no address appears when reparsed.
+	for _, name := range []string{"CEO <ceo@corp.example>", "a@b.example", "Bob"} {
+		s := (Mailbox{Name: name}).String()
+		if !strings.HasPrefix(s, `"`) {
+			t.Fatalf("name-only not quoted: %s", s)
+		}
+		for _, m := range reparse(s).Mailboxes {
+			if m.Address != "" {
+				t.Fatalf("%s reparsed to address %q", s, m.Address)
+			}
+		}
+	}
+	if s := (Mailbox{"=?utf-8?q?Bank_=3Cs@bank.example=3E?=", "a@evil.example"}).String(); !strings.HasPrefix(s, `"=?`) {
+		t.Fatalf("encoded word not quoted: %s", s)
+	}
+	if s := (Mailbox{"a\u0085b\u2028c", "x@example.com"}).String(); s != `a b c <x@example.com>` {
+		t.Fatalf("C1/separators: %q", s)
+	}
+}
+
+func TestMSGRecipientComparison(t *testing.T) {
+	hdr := "From: a@example.com\r\nTo: taro@corp.example\r\nBcc: boss@corp.example\r\nSubject: s\r\nMessage-ID: <h@example.com>\r\n"
+	m, _ := ParseBytes(buildMSG([]mapi{{pidTransportHeaders, hdr}, {pidSubject, "s"}},
+		recip(0, mapi{pidRecipientType, uint32(1)}, mapi{pidSMTPAddress, "taro@corp.example"}),
+		recip(1, mapi{pidRecipientType, uint32(3)}, mapi{pidSMTPAddress, "spy@evil.example"}),
+		recip(2, mapi{pidRecipientType, uint32(1)}, mapi{pidDisplayName, "CEO"}, mapi{pidEmailAddress, "/O=EVIL/CN=CEO"})), Options{})
+	if len(m.Bcc) != 1 || m.Bcc[0].Mailboxes[0].Address != "boss@corp.example" || codes(m.Warnings)[WarnHeaderMismatch] != 2 {
+		t.Fatalf("%+v %v", m.Bcc, m.Warnings)
+	}
+	// Every recipient object skipped: To stays empty, each skip is warned.
+	m, _ = ParseBytes(buildMSG([]mapi{{pidSubject, "s"}}, recip(0, mapi{pidRecipientType, uint32(1)})), Options{})
+	if len(m.To) != 0 || codes(m.Warnings)[WarnRecipientType] != 1 {
+		t.Fatalf("%+v %v", m.To, m.Warnings)
+	}
+	// TNEF with headers and a recipient table.
+	tn := tnefStream(
+		tnefAttr(tnefLevelMessage, attMsgProps, tnefPropList(tprop{tag: tag(pidTransportHeaders, ptUnicode), val: u16le("From: a@example.com\r\nTo: taro@corp.example\r\nMessage-ID: <t@example.com>\r\n")})),
+		tnefAttr(tnefLevelMessage, attRecipTable, append(le32b(1), tnefPropList(tprop{tag: tag(pidRecipientType, ptInt32), val: uint32(3)}, tprop{tag: tag(pidSMTPAddress, ptUnicode), val: u16le("hidden@corp.example")})...)))
+	m, _ = ParseBytes(tn, Options{})
+	if len(m.Bcc) != 1 || codes(m.Warnings)[WarnBccFromMAPI] != 1 {
+		t.Fatalf("tnef: %+v %v", m.Bcc, m.Warnings)
+	}
+	// An SMTP property that is no address is warned about.
+	m, _ = ParseBytes(buildMSG([]mapi{{pidSubject, "s"}, {pidSentRepSMTP, "x@evil.example\r\nBcc: y@evil.example"}}), Options{})
+	if codes(m.Warnings)[WarnInvalidAddress] != 1 {
+		t.Fatalf("%v", m.Warnings)
+	}
+}
+
+func TestBOMDeclarationsAndLeadingBOM(t *testing.T) {
+	body := append([]byte{0xFF, 0xFE}, utf16Bytes("hi", false)...)
+	for _, cs := range []string{"utf-16", "UTF-16LE", "unicode"} {
+		var ws []Warning
+		r := toUTF8("text/plain", cs, body, "1", func(w Warning) { ws = append(ws, w) })
+		if r.content != "hi" || len(ws) != 0 {
+			t.Errorf("%s: %+v %v", cs, r, ws)
+		}
+	}
+	m, err := ParseBytes([]byte("\xEF\xBB\xBFFrom: a@example.com\r\nMessage-ID: <b@example.com>\r\nSubject: bom\r\n\r\nx"), Options{})
+	if err != nil || len(m.From) != 1 || m.Subject != "bom" || codes(m.Warnings)[WarnLeadingBOM] != 1 {
+		t.Fatalf("%v %+v", err, m)
+	}
+}
+
+func TestLenientQuotedName(t *testing.T) {
+	al := parseAddressList(Field{Name: "From", Raw: `"CEO <ceo@corp.example>"`}, "", func(Warning) {})
+	if len(al.Mailboxes) != 1 || al.Mailboxes[0].Address != "" || al.Mailboxes[0].Name != "CEO <ceo@corp.example>" {
+		t.Fatalf("%+v", al)
+	}
+}

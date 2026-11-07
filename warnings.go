@@ -5,6 +5,7 @@ package mailparse
 // are stable; Detail is our own wording (never text taken from the message,
 // beyond a sanitized short token such as a charset name).
 const (
+	WarnLeadingBOM          = "leading_bom"               // the message started with a UTF-8 byte order mark (a tool's artifact); it was skipped
 	WarnMboxFromLine        = "mbox_from_line"            // a leading "From " line was skipped
 	WarnMalformedHeaderLine = "malformed_header_line"     // a header line that is neither a field nor a continuation was skipped
 	WarnRaw8BitHeader       = "raw_8bit_header"           // a header value held raw non-UTF-8 bytes; the charset was guessed

@@ -17,6 +17,10 @@ var singletonFields = []string{"From", "Sender", "Reply-To", "To", "Cc", "Bcc", 
 func (st *state) parseEML(b []byte, depth int) *Message {
 	m := &Message{Format: FormatEML, Size: int64(len(b)), Bodies: []Body{}, Attachments: []Attachment{}, Warnings: []Warning{}}
 	warn := warner(m)
+	if bytes.HasPrefix(b, []byte("\xEF\xBB\xBF")) {
+		b = b[3:]
+		warn(Warning{Code: WarnLeadingBOM, Detail: "the message started with a UTF-8 byte order mark; it was skipped", Part: ""})
+	}
 
 	h, body := st.readHeader(b, "", warn)
 	m.Header = h

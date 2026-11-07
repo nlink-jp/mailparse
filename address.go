@@ -107,31 +107,73 @@ func lenientMailbox(item, fieldName, part string, warn func(Warning)) (Mailbox, 
 	if item == "" {
 		return Mailbox{}, false
 	}
-	if lt := strings.LastIndexByte(item, '<'); lt >= 0 && strings.IndexByte(item[lt:], '>') < 0 {
+	// Structure ('<', '>', '@') is searched outside quoted strings: a quoted
+	// display name is attacker text, and "CEO <ceo@corp.example>" in quotes is
+	// a name, never an address.
+	mask := outsideQuotes(item)
+	if lt := strings.LastIndexByte(mask, '<'); lt >= 0 && strings.IndexByte(mask[lt:], '>') < 0 {
 		// An unclosed '<': the address is what follows it, the name what
 		// precedes the first one.
 		addr := strings.TrimSpace(item[lt+1:])
-		if strings.Contains(addr, "@") {
-			name := strings.Trim(strings.TrimSpace(item[:strings.IndexByte(item, '<')]), "\"")
+		if strings.Contains(outsideQuotes(addr), "@") {
+			name := displayName(item[:strings.IndexByte(mask, '<')], fieldName, part, warn)
 			return Mailbox{Name: name, Address: addr}, true
 		}
 	}
-	if lt := strings.LastIndexByte(item, '<'); lt >= 0 {
-		if gt := strings.IndexByte(item[lt:], '>'); gt > 0 {
+	if lt := strings.LastIndexByte(mask, '<'); lt >= 0 {
+		if gt := strings.IndexByte(mask[lt:], '>'); gt > 0 {
 			addr := strings.TrimSpace(item[lt+1 : lt+gt])
-			name := strings.Trim(strings.TrimSpace(item[:lt]), "\"")
-			if strings.Contains(name, "=?") {
-				name = decodeWords(name, "a display name in "+safeToken(fieldName), part, warn)
-			}
+			name := displayName(item[:lt], fieldName, part, warn)
 			return Mailbox{Name: name, Address: addr}, addr != "" || name != ""
 		}
 	}
-	for _, tok := range strings.Fields(item) {
-		if strings.Contains(tok, "@") {
-			return Mailbox{Address: strings.Trim(tok, "<>\"(),;")}, true
+	fields := strings.Fields(mask)
+	pos := 0
+	for _, f := range fields {
+		at := strings.Index(mask[pos:], f) + pos
+		pos = at + len(f)
+		if strings.Contains(f, "@") {
+			return Mailbox{Address: strings.Trim(item[at:pos], "<>\"(),;")}, true
 		}
 	}
 	// Neither form: keep the text as an address-less name (Exchange /O= forms
 	// and the like stay visible instead of vanishing).
-	return Mailbox{Name: item}, true
+	return Mailbox{Name: displayName(item, fieldName, part, warn)}, true
+}
+
+// displayName reads a display name: a quoted-string is unquoted (quoted-pairs
+// undone), and RFC 2047 words outside quotes are decoded.
+func displayName(s, fieldName, part string, warn func(Warning)) string {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, `"`) {
+		return unquoteParam(s)
+	}
+	if strings.Contains(s, "=?") {
+		return decodeWords(s, "a display name in "+safeToken(fieldName), part, warn)
+	}
+	return s
+}
+
+// outsideQuotes returns s, byte for byte, with every byte inside a
+// quoted-string (quotes included) replaced by '_', so its structure can be
+// searched without matching what a display name holds.
+func outsideQuotes(s string) string {
+	b := []byte(s)
+	quoted, escaped := false, false
+	for i, c := range b {
+		switch {
+		case escaped:
+			escaped = false
+			b[i] = '_'
+		case quoted && c == '\\':
+			escaped = true
+			b[i] = '_'
+		case c == '"':
+			quoted = !quoted
+			b[i] = '_'
+		case quoted:
+			b[i] = '_'
+		}
+	}
+	return string(b)
 }

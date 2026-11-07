@@ -85,8 +85,10 @@ detection, hashing.
 
 - **Write a mailbox back with `Mailbox.String()`**, never `Name + " <" + Address + ">"`. A display name is attacker
   text: one that decodes to `Bank <security@bank.example>` joined naively turns back into the spoofed address the
-  parser kept inside the name. `String()` quotes such a name (RFC 5322) and writes a mailbox without an address as
-  its quoted name alone.
+  parser kept inside the name. `String()` quotes such a name (RFC 5322), quotes a local part that is not a dot-atom,
+  never writes something that is no valid address as one (it goes into the quoted display text), and writes a
+  mailbox without an address as its quoted name alone — display text, with no address in it. Reading what it writes
+  gives the same one mailbox back.
 - **`Mailbox.Address` can be empty**: a lenient reading of a field that did not parse may find only a name, and a
   `.msg`/TNEF mailbox may carry only an Exchange DN (`/O=...`). `AddressList.Raw` then holds what was written.
 - **`Field.Value` keeps folding whitespace** (tabs included), as RFC 5322 leaves it; `net/textproto` joined lines with
@@ -98,9 +100,9 @@ detection, hashing.
   warnings with absolute `Part` paths.
 - **Where a body came from**: `Body.Origin` — `mime`, `mapi` (a .msg/TNEF body property), `rtf` (compressed RTF,
   in a .msg usually a copy of a `mapi` body), `tnef` (TNEF's legacy body).
-- **.msg recipients**: with internet headers, To and Cc come from the headers; Bcc, which headers never carry, comes
-  from the MAPI recipient table (`bcc_from_mapi`), and a table address missing from the headers is reported
-  (`mapi_header_mismatch`). Without headers or recipient objects, Outlook's display lists give names only.
+- **.msg recipients**: with internet headers, To, Cc and Bcc come from the headers. Received mail carries no Bcc header,
+  so Bcc then comes from the MAPI recipient table (`bcc_from_mapi`); a table address missing from the headers, and a
+  table recipient with only an Exchange DN (which cannot be compared), are reported (`mapi_header_mismatch`). Without headers or recipient objects, Outlook's display lists give names only.
   `InReplyTo` and `References` come from the headers, or from MAPI for a headerless `.msg`.
 
 ## Package msgtest (test support)

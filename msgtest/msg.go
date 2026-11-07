@@ -20,49 +20,49 @@ const (
 
 // Property IDs often needed in fixtures (MS-OXPROPS). Any other ID works too.
 const (
-	PidTagSubject                     = 0x0037
-	PidTagClientSubmitTime            = 0x0039
-	PidTagSentRepresentingName        = 0x0042
-	PidTagSentRepresentingEmail       = 0x0065
-	PidTagTransportMessageHeaders     = 0x007D
-	PidTagRecipientType               = 0x0C15
-	PidTagSenderName                  = 0x0C1A
-	PidTagSenderEmailAddress          = 0x0C1F
-	PidTagDisplayBcc                  = 0x0E02
-	PidTagDisplayCc                   = 0x0E03
-	PidTagDisplayTo                   = 0x0E04
-	PidTagMessageDeliveryTime         = 0x0E06
-	PidTagBody                        = 0x1000
-	PidTagRtfCompressed               = 0x1009
-	PidTagHtml                        = 0x1013
-	PidTagInternetMessageID           = 0x1035
-	PidTagInternetReferences          = 0x1039
-	PidTagInReplyToID                 = 0x1042
-	PidTagDisplayName                 = 0x3001
-	PidTagEmailAddress                = 0x3003
-	PidTagAttachDataBinary            = 0x3701
-	PidTagAttachFilename              = 0x3704
-	PidTagAttachMethod                = 0x3705
-	PidTagAttachLongFilename          = 0x3707
-	PidTagAttachMimeTag               = 0x370E
-	PidTagAttachContentID             = 0x3712
-	PidTagAttachFlags                 = 0x3714
-	PidTagSMTPAddress                 = 0x39FE
-	PidTagInternetCodepage            = 0x3FDE
-	PidTagMessageCodepage             = 0x3FFD
-	PidTagSenderSMTPAddress           = 0x5D01
-	PidTagSentRepresentingSMTPAddress = 0x5D02
-	PidTagAttachmentHidden            = 0x7FFE
+	PidTagSubject                      = 0x0037
+	PidTagClientSubmitTime             = 0x0039
+	PidTagSentRepresentingName         = 0x0042
+	PidTagSentRepresentingEmailAddress = 0x0065
+	PidTagTransportMessageHeaders      = 0x007D
+	PidTagRecipientType                = 0x0C15
+	PidTagSenderName                   = 0x0C1A
+	PidTagSenderEmailAddress           = 0x0C1F
+	PidTagDisplayBcc                   = 0x0E02
+	PidTagDisplayCc                    = 0x0E03
+	PidTagDisplayTo                    = 0x0E04
+	PidTagMessageDeliveryTime          = 0x0E06
+	PidTagBody                         = 0x1000
+	PidTagRtfCompressed                = 0x1009
+	PidTagHtml                         = 0x1013
+	PidTagInternetMessageID            = 0x1035
+	PidTagInternetReferences           = 0x1039
+	PidTagInReplyToID                  = 0x1042
+	PidTagDisplayName                  = 0x3001
+	PidTagEmailAddress                 = 0x3003
+	PidTagAttachDataBinary             = 0x3701
+	PidTagAttachFilename               = 0x3704
+	PidTagAttachMethod                 = 0x3705
+	PidTagAttachLongFilename           = 0x3707
+	PidTagAttachMimeTag                = 0x370E
+	PidTagAttachContentID              = 0x3712
+	PidTagAttachFlags                  = 0x3714
+	PidTagSMTPAddress                  = 0x39FE
+	PidTagInternetCodepage             = 0x3FDE
+	PidTagMessageCodepage              = 0x3FFD
+	PidTagSenderSMTPAddress            = 0x5D01
+	PidTagSentRepresentingSMTPAddress  = 0x5D02
+	PidTagAttachmentHidden             = 0x7FFE
 )
 
 // Attachment methods (PidTagAttachMethod) and recipient types.
 const (
-	AttachByValue         = 1
-	AttachEmbeddedMessage = 5
-	AttachOLE             = 6
-	RecipientTo           = 1
-	RecipientCc           = 2
-	RecipientBcc          = 3
+	AttachByValue         uint32 = 1
+	AttachEmbeddedMessage uint32 = 5
+	AttachOLE             uint32 = 6
+	RecipientTo           uint32 = 1
+	RecipientCc           uint32 = 2
+	RecipientBcc          uint32 = 3
 )
 
 // Property stream header sizes (MS-OXMSG 2.4).
@@ -77,7 +77,7 @@ const (
 type String8 []byte
 
 // Prop is one MAPI property. The Go type of Value picks the MAPI type: string
-// (PtypString, UTF-16LE), String8, []byte (PtypBinary), uint32
+// (PtypString, UTF-16LE), String8, []byte (PtypBinary), uint32 or int
 // (PtypInteger32), bool (PtypBoolean), time.Time (PtypTime).
 type Prop struct {
 	ID    uint16
@@ -121,6 +121,9 @@ func Object(header int, props []Prop, extra ...*Node) []*Node {
 		case uint32:
 			typ = PtypInteger32
 			binary.LittleEndian.PutUint32(val[:], v)
+		case int:
+			typ = PtypInteger32
+			binary.LittleEndian.PutUint32(val[:], uint32(v))
 		case bool:
 			typ = PtypBoolean
 			if v {

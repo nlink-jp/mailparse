@@ -138,48 +138,110 @@ type Mailbox struct {
 	Address string `json:"address"`
 }
 
-// String writes the mailbox in RFC 5322 form. A display name holding anything
-// but atom characters and spaces is written as a quoted-string, so a name that
-// decodes to "Bank <security@bank.example>" stays a name when the result is
-// parsed again — joining Name and Address naively re-creates the spoof the
-// parser prevented. A mailbox with no address is its quoted name alone (never
-// "<>"); line breaks and other control characters in a name become spaces.
+// String writes the mailbox in RFC 5322 form, so that parsing the result again
+// gives this one mailbox back. A display name holding anything but atom
+// characters and spaces — or an RFC 2047 "=?" — is written as a quoted-string,
+// so a name that decodes to "Bank <security@bank.example>" stays a name;
+// joining Name and Address naively re-creates the spoof the parser prevented.
+// The address's local part is quoted when it is not a dot-atom. An address
+// that cannot be written as an addr-spec (a domain that is not a host name or
+// literal, control characters) is not written as an address: it goes into the
+// quoted display text instead. A mailbox with no address is its quoted name
+// alone — display text with no address in it, never "<>". Control characters
+// and line separators in a name become spaces.
 func (mb Mailbox) String() string {
+	addr, ok := addrSpec(mb.Address)
 	switch {
+	case mb.Address != "" && !ok:
+		return quoteAlways(strings.TrimSpace(mb.Name + " " + mb.Address))
 	case mb.Address == "" && mb.Name == "":
 		return ""
 	case mb.Address == "":
-		return quoteName(mb.Name)
+		return quoteAlways(mb.Name)
 	case mb.Name == "":
-		return mb.Address
+		return addr
 	}
-	return quoteName(mb.Name) + " <" + mb.Address + ">"
+	return quoteName(mb.Name) + " <" + addr + ">"
+}
+
+// addrSpec writes an address as an RFC 5322 addr-spec, quoting a local part
+// that is not a dot-atom, and reports false when the domain is not a dot-atom
+// or a domain literal or anything holds a control character.
+func addrSpec(a string) (string, bool) {
+	at := strings.LastIndexByte(a, '@')
+	if at <= 0 || at == len(a)-1 {
+		return "", false
+	}
+	local, domain := a[:at], a[at+1:]
+	for _, r := range a {
+		if isControl(r) {
+			return "", false
+		}
+	}
+	switch {
+	case strings.HasPrefix(domain, "[") && strings.HasSuffix(domain, "]"):
+		if strings.ContainsAny(domain[1:len(domain)-1], "[]\\ ") {
+			return "", false
+		}
+	case !isDotAtom(domain):
+		return "", false
+	}
+	if !isDotAtom(local) {
+		local = `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(local) + `"`
+	}
+	return local + "@" + domain, true
+}
+
+func isAtext(r rune) bool {
+	return r >= 0x80 || ('a' <= r && r <= 'z') || ('A' <= r && r <= 'Z') || ('0' <= r && r <= '9') ||
+		strings.ContainsRune("!#$%&'*+-/=?^_`{|}~", r)
+}
+
+func isDotAtom(s string) bool {
+	if s == "" || strings.HasPrefix(s, ".") || strings.HasSuffix(s, ".") || strings.Contains(s, "..") {
+		return false
+	}
+	for _, r := range s {
+		if r != '.' && !isAtext(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// isControl reports C0, DEL, C1 and the Unicode line and paragraph separators.
+func isControl(r rune) bool {
+	return r < 0x20 || (r >= 0x7f && r <= 0x9f) || r == 0x2028 || r == 0x2029
+}
+
+func cleanName(name string) string {
+	return strings.Map(func(r rune) rune {
+		if isControl(r) {
+			return ' '
+		}
+		return r
+	}, name)
 }
 
 // quoteName returns a display name as an RFC 5322 phrase: as is when it is
-// atoms (RFC 6532 non-ASCII included) and spaces, else a quoted-string.
+// atoms (RFC 6532 non-ASCII included) and single spaces, else a quoted-string.
 func quoteName(name string) string {
-	clean := []rune{}
+	name = cleanName(name)
+	plain := name != "" && strings.TrimSpace(name) == name && !strings.Contains(name, "=?")
 	for _, r := range name {
-		if r < 0x20 || r == 0x7f {
-			r = ' '
+		if r != ' ' && !isAtext(r) {
+			plain = false
+			break
 		}
-		clean = append(clean, r)
-	}
-	name = string(clean)
-	plain := strings.TrimSpace(name) == name && name != ""
-	for _, r := range name {
-		if r >= 0x80 || r == ' ' || ('a' <= r && r <= 'z') || ('A' <= r && r <= 'Z') || ('0' <= r && r <= '9') || strings.ContainsRune("!#$%&'*+-/=?^_`{|}~", r) {
-			continue
-		}
-		plain = false
-		break
 	}
 	if plain {
 		return name
 	}
-	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`)
-	return `"` + r.Replace(name) + `"`
+	return quoteAlways(name)
+}
+
+func quoteAlways(name string) string {
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(cleanName(name)) + `"`
 }
 
 // Body is one text part, converted to UTF-8.
