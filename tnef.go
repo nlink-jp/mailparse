@@ -151,6 +151,9 @@ func (st *state) parseTNEF(b []byte, depth int, part string) (*Message, error) {
 	internetCP, msgCP := cpCharset(msgProps, pidInternetCodepage), cpCharset(msgProps, pidMessageCodepage)
 	charset := firstNonEmpty(codePageCharset(oemCP), internetCP, msgCP)
 	msgProps.charset = charset
+	for _, q := range recips {
+		q.charset = charset
+	}
 	msgProps.bodyCharset = charset
 	msgProps.htmlCharset = firstNonEmpty(internetCP, charset)
 	legacy := func(s string) string {
@@ -165,12 +168,10 @@ func (st *state) parseTNEF(b []byte, depth int, part string) (*Message, error) {
 		m.Header = h
 		st.fillIdentity(m, warn)
 		compareIdentity(m, msgProps, part, warn)
+		applyRecipients(m, msgProps, recips, true, part, warn)
 	} else {
 		identityFromProps(m, msgProps, part, warn)
-		for _, q := range recips {
-			q.charset = charset
-		}
-		setRecipients(m, recips, part, warn)
+		applyRecipients(m, msgProps, recips, false, part, warn)
 	}
 	if m.Subject == "" {
 		m.Subject = legacy(subject)
@@ -185,7 +186,7 @@ func (st *state) parseTNEF(b []byte, depth int, part string) (*Message, error) {
 	if !hasText && legacyBody != nil {
 		body := st.budgeted(bytes.Clone(trimNUL(legacyBody)), part+"/body", warn)
 		r := decodeText("text/plain", charset, "codepage", body, part+"/body", warn)
-		m.Bodies = append(m.Bodies, Body{MediaType: "text/plain", Content: r.content, Charset: r.charset, CharsetSource: r.source, Size: len(body), Part: part + "/body"})
+		m.Bodies = append(m.Bodies, Body{MediaType: "text/plain", Content: r.content, Charset: r.charset, CharsetSource: r.source, Size: len(body), Part: part + "/body", Origin: "tnef"})
 	}
 
 	for _, ta := range atts {

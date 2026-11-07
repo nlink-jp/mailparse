@@ -50,6 +50,12 @@ func (st *state) fillIdentity(m *Message, warn func(Warning)) {
 	if f, ok := m.Header.First("Message-ID"); ok {
 		m.MessageID = unfold([]byte(f.Raw))
 	}
+	if f, ok := m.Header.First("In-Reply-To"); ok {
+		m.InReplyTo = collapse(unfold([]byte(f.Raw)))
+	}
+	if f, ok := m.Header.First("References"); ok {
+		m.References = collapse(unfold([]byte(f.Raw)))
+	}
 	if f, ok := m.Header.First("Date"); ok {
 		m.DateRaw = unfold([]byte(f.Raw))
 		if t, err := mail.ParseDate(m.DateRaw); err == nil {
@@ -141,10 +147,13 @@ func (st *state) entity(m *Message, h Header, body []byte, p string, mimeDepth, 
 	isText := mediaType == "text/plain" || mediaType == "text/html"
 	if isText && disp != "attachment" && filename == "" {
 		r := toUTF8(mediaType, params["charset"], data, p, warn)
-		m.Bodies = append(m.Bodies, Body{MediaType: mediaType, Content: r.content, Charset: r.charset, CharsetSource: r.source, Size: len(data), Part: p})
+		m.Bodies = append(m.Bodies, Body{MediaType: mediaType, Content: r.content, Charset: r.charset, CharsetSource: r.source, Size: len(data), Part: p, Origin: "mime"})
 		return node
 	}
 	att := st.attachment(h, mediaType, disp, filename, data, p)
+	if strings.HasPrefix(mediaType, "text/") {
+		att.Charset = params["charset"]
+	}
 	// A message attached under another type (application/octet-stream, a .eml
 	// or .msg name) is recognized by content and opened.
 	att.Message = st.openByContent(data, mediaType, filename, msgDepth, p, warn)

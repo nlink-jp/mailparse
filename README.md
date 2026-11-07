@@ -43,7 +43,10 @@ for _, w := range m.Warnings { /* what the parse met */ }
 is `unknown` and is never "parsed" as mail. An `.eml` needs a field only mail carries (Received, Message-ID,
 Return-Path, DKIM-Signature...), or a From with an address among field names that look like mail (none with `_`,
 not all lowercase) — a minimal From/To/Subject message from a script is mail; a YAML file with `from:` and `to:`
-keys or an HTTP header dump is not.
+keys or an HTTP header dump is not. **Not detected:** a From with no `@` (cron's `From: root`), no From at all
+(To and Subject alone), and a block with only one well-known field. When the caller knows the input is mail (a
+`.eml` argument, a mail tool's stdin), set `Options.AssumeEML`: such input is then read with a
+`not_detected_as_mail` warning (input with no header field is still `ErrNotMessage`).
 
 ## What it reads, and what it leaves to you
 
@@ -78,6 +81,41 @@ internet Message-ID) is not reported as one.
 Leaves to the consumer: the meaning of Received or Authentication-Results, URL extraction, attachment type
 detection, hashing.
 
+## Reading the result safely
+
+- **Write a mailbox back with `Mailbox.String()`**, never `Name + " <" + Address + ">"`. A display name is attacker
+  text: one that decodes to `Bank <security@bank.example>` joined naively turns back into the spoofed address the
+  parser kept inside the name. `String()` quotes such a name (RFC 5322) and writes a mailbox without an address as
+  its quoted name alone.
+- **`Mailbox.Address` can be empty**: a lenient reading of a field that did not parse may find only a name, and a
+  `.msg`/TNEF mailbox may carry only an Exchange DN (`/O=...`). `AddressList.Raw` then holds what was written.
+- **`Field.Value` keeps folding whitespace** (tabs included), as RFC 5322 leaves it; `net/textproto` joined lines with
+  one space. `Field.Collapsed()` gives that form. For address fields, `Value` is display text — read addresses from
+  `From`, `To` and the other parsed lists.
+- **Text attachments**: only text/plain and text/html are bodies. A text/calendar invitation or text/csv is an
+  attachment with its declared `Charset`; `Attachment.Text()` converts it with the rules bodies use.
+- **Nested messages**: `Walk` visits the message and every nested one with its path ("2>1"); `AllWarnings` returns all
+  warnings with absolute `Part` paths.
+- **Where a body came from**: `Body.Origin` — `mime`, `mapi` (a .msg/TNEF body property), `rtf` (compressed RTF,
+  in a .msg usually a copy of a `mapi` body), `tnef` (TNEF's legacy body).
+- **.msg recipients**: with internet headers, To and Cc come from the headers; Bcc, which headers never carry, comes
+  from the MAPI recipient table (`bcc_from_mapi`), and a table address missing from the headers is reported
+  (`mapi_header_mismatch`). Without headers or recipient objects, Outlook's display lists give names only.
+  `InReplyTo` and `References` come from the headers, or from MAPI for a headerless `.msg`.
+
+## Package msgtest (test support)
+
+`github.com/nlink-jp/mailparse/msgtest` builds fictional `.msg` files, winmail.dat streams, compressed RTF and the
+compound files under them, so consumers write fixtures instead of committing real messages:
+
+```go
+b := msgtest.Message([]msgtest.Prop{msgtest.P(msgtest.PidTagSubject, "Hello")},
+	msgtest.Recipient(0, msgtest.P(msgtest.PidTagRecipientType, uint32(msgtest.RecipientTo)),
+		msgtest.P(msgtest.PidTagSMTPAddress, "bob@example.org")))
+```
+
+It writes and does not check; keep it in tests.
+
 ## Package cfb
 
 `github.com/nlink-jp/mailparse/cfb` reads Compound File Binary files (MS-CFB) — the container of `.msg` and of
@@ -98,7 +136,7 @@ data, err := f.ReadStream(f.Root.Child("WordDocument"))
 
 | Option | Default |
 |---|---|
-| `MaxSize` | 30 MiB |
+| `MaxSize` | 64 MiB (a 25 MB attachment is about 34 MB in Base64) |
 | `MaxMessageDepth` | 3 nested layers |
 | `MaxMIMEDepth` | 32 |
 | `MaxParts` | 1,000 across every layer |

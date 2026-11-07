@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 )
 
@@ -27,7 +28,7 @@ var (
 
 // Default limits (the RFP §2 table).
 const (
-	DefaultMaxSize         = 30 << 20
+	DefaultMaxSize         = 64 << 20 // a 25 MB attachment is about 34 MB in Base64; providers accept up to 50 MB and more
 	DefaultMaxMessageDepth = 3
 	DefaultMaxMIMEDepth    = 32
 	DefaultMaxParts        = 1000
@@ -45,6 +46,15 @@ type Options struct {
 	MaxDecoded      int64 // decoded bytes kept across every layer (an attached message's bytes and its parts each count)
 	MaxHeaders      int   // header fields per header block
 	MaxHeaderBytes  int   // header bytes per header block
+
+	// AssumeEML reads input that Detect does not recognize as an RFC 5322
+	// message anyway, with a not_detected_as_mail warning, instead of
+	// returning ErrNotMessage. Set it when the caller knows the input is mail
+	// (a .eml argument, a mail tool's stdin): Detect refuses some minimal mail
+	// (cron's "From: root", no From at all, one well-known field). Input with
+	// no header field at all is still ErrNotMessage. .msg and TNEF are not
+	// affected.
+	AssumeEML bool
 }
 
 func (o Options) withDefaults() Options {
@@ -95,6 +105,11 @@ type Message struct {
 	MessageID string    `json:"message_id,omitempty"`
 	Date      time.Time `json:"date,omitzero"`
 	DateRaw   string    `json:"date_raw,omitempty"`
+	// InReplyTo and References are the In-Reply-To and References fields
+	// unfolded as written (message IDs in angle brackets); for a .msg or TNEF
+	// without internet headers, PidTagInReplyToId and PidTagInternetReferences.
+	InReplyTo  string `json:"in_reply_to,omitempty"`
+	References string `json:"references,omitempty"`
 
 	Bodies      []Body       `json:"bodies"`
 	Attachments []Attachment `json:"attachments"`
@@ -113,9 +128,58 @@ type AddressList struct {
 
 // Mailbox is one address. Name is the decoded display name; it is attacker text
 // and may itself contain something that looks like an address.
+//
+// Address is empty when none was found: a lenient reading of a field that did
+// not parse may yield only a name, and a .msg or TNEF mailbox may carry only an
+// Exchange DN ("/O=...", kept in the AddressList's Raw). Raw then holds what was
+// written.
 type Mailbox struct {
-	Name    string `json:"name,omitempty"`
+	Name    string `json:"name,omitempty"` // decoded display name: attacker text that may look like an address
 	Address string `json:"address"`
+}
+
+// String writes the mailbox in RFC 5322 form. A display name holding anything
+// but atom characters and spaces is written as a quoted-string, so a name that
+// decodes to "Bank <security@bank.example>" stays a name when the result is
+// parsed again — joining Name and Address naively re-creates the spoof the
+// parser prevented. A mailbox with no address is its quoted name alone (never
+// "<>"); line breaks and other control characters in a name become spaces.
+func (mb Mailbox) String() string {
+	switch {
+	case mb.Address == "" && mb.Name == "":
+		return ""
+	case mb.Address == "":
+		return quoteName(mb.Name)
+	case mb.Name == "":
+		return mb.Address
+	}
+	return quoteName(mb.Name) + " <" + mb.Address + ">"
+}
+
+// quoteName returns a display name as an RFC 5322 phrase: as is when it is
+// atoms (RFC 6532 non-ASCII included) and spaces, else a quoted-string.
+func quoteName(name string) string {
+	clean := []rune{}
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			r = ' '
+		}
+		clean = append(clean, r)
+	}
+	name = string(clean)
+	plain := strings.TrimSpace(name) == name && name != ""
+	for _, r := range name {
+		if r >= 0x80 || r == ' ' || ('a' <= r && r <= 'z') || ('A' <= r && r <= 'Z') || ('0' <= r && r <= '9') || strings.ContainsRune("!#$%&'*+-/=?^_`{|}~", r) {
+			continue
+		}
+		plain = false
+		break
+	}
+	if plain {
+		return name
+	}
+	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`)
+	return `"` + r.Replace(name) + `"`
 }
 
 // Body is one text part, converted to UTF-8.
@@ -133,6 +197,11 @@ type Body struct {
 	// .msg or TNEF the property ("msg/body", "msg/html", "msg/rtf",
 	// "tnef/body"). A nested message names its parts from its own root.
 	Part string `json:"part"`
+	// Origin names the kind of source: "mime" (a MIME part), "mapi" (a .msg or
+	// TNEF body property: PidTagBody, PidTagHtml), "rtf" (recovered from
+	// compressed RTF — in a .msg usually a copy of a "mapi" body), or "tnef"
+	// (TNEF's legacy attBody).
+	Origin string `json:"origin"`
 }
 
 // Attachment is one non-body part. Data holds its decoded bytes (a copy).
@@ -143,8 +212,11 @@ type Attachment struct {
 	ContentID   string `json:"content_id,omitempty"`
 	Inline      bool   `json:"inline,omitempty"`
 	Size        int    `json:"size"`
-	Data        []byte `json:"-"`
-	Part        string `json:"part"`
+	// Charset is the charset a text/* attachment declared ("" otherwise);
+	// Text converts the attachment with it.
+	Charset string `json:"charset,omitempty"`
+	Data    []byte `json:"-"`
+	Part    string `json:"part"`
 	// Message is the parsed message when the attachment is itself a message
 	// (message/rfc822, or recognized by content) and the depth limit allowed
 	// opening it.
@@ -224,7 +296,16 @@ func ParseBytes(b []byte, opt Options) (*Message, error) {
 		}
 		return m, nil
 	default:
-		return nil, ErrNotMessage
+		if !opt.AssumeEML {
+			return nil, ErrNotMessage
+		}
+		st := &state{opt: opt}
+		m := st.parseEML(b, 0)
+		if len(m.Header) == 0 {
+			return nil, ErrNotMessage
+		}
+		m.Warnings = append([]Warning{{Code: WarnNotDetected, Detail: "the input was not recognized as mail; it was read as RFC 5322 because Options.AssumeEML is set"}}, m.Warnings...)
+		return m, nil
 	}
 }
 

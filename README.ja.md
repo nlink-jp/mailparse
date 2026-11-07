@@ -40,7 +40,10 @@ for _, w := range m.Warnings { /* 解析中に起きたこと */ }
 `unknown` で、メールとして「読まれる」ことはありません。`.eml` と判別するには、メールにしか現れない欄（Received、
 Message-ID、Return-Path、DKIM-Signature など）か、メールらしい欄名（`_` を含まず、すべて小文字ではない）の中に
 アドレスを含む From が要ります。スクリプトが送る From/To/Subject だけのメールはメールで、`from:` と `to:` のキーを
-持つ YAML や、HTTP のヘッダの写しはメールではありません。
+持つ YAML や、HTTP のヘッダの写しはメールではありません。**判別しないもの:** `@` の無い From（cron の
+`From: root`）、From の無いもの（To と Subject だけ）、よく知られた欄が 1 つしかないもの。呼び出し側がメールだと
+分かっているとき（`.eml` の引数、メールの道具の標準入力）は `Options.AssumeEML` を指定してください。そうした入力を
+`not_detected_as_mail` の警告つきで読みます（ヘッダの欄が 1 つも無い入力は、引き続き `ErrNotMessage`）。
 
 ## 読むもの・使う側に任せるもの
 
@@ -73,6 +76,42 @@ winmail.dat（TNEF。たいてい `application/ms-tnef` の添付で、形式 `t
 
 使う側に任せる: Received や Authentication-Results の意味、URL の取り出し、添付の種類の判別、ハッシュの計算。
 
+## 結果を安全に使う
+
+- **メールボックスを文字列に戻すときは `Mailbox.String()` を使う。** `Name + " <" + Address + ">"` と単純に
+  つないではいけません。表示名は攻撃者が書いた文字列で、`Bank <security@bank.example>` に復号される名前を
+  そのままつなぐと、パーサーが名前の中に閉じ込めた偽のアドレスがよみがえります。`String()` はそうした名前を
+  引用符で囲み（RFC 5322）、アドレスの無いメールボックスは引用符で囲んだ名前だけを書きます。
+- **`Mailbox.Address` は空になることがある。** 解析できない欄を寛容に読んで名前しか見つからないとき、.msg や
+  TNEF のメールボックスが Exchange の DN（`/O=...`）しか持たないときです。そのとき `AddressList.Raw` に書かれた
+  ままの値があります。
+- **`Field.Value` は折り返しの空白（タブを含む）を残す。** RFC 5322 のとおりで、`net/textproto` は空白 1 つで
+  つないでいました。その形は `Field.Collapsed()` で得られます。アドレスの欄の `Value` は表示用の文字列で、
+  アドレスは解析済みの `From`・`To` などから読んでください。
+- **テキストの添付:** 本文になるのは text/plain と text/html だけです。text/calendar の招待や text/csv は、宣言
+  された `Charset` を持つ添付になり、`Attachment.Text()` で本文と同じ規則で UTF-8 に直せます。
+- **入れ子のメール:** `Walk` はメールと入れ子のメールを、その位置（"2>1"）とともにたどります。`AllWarnings` は
+  すべての警告を、絶対の `Part` で返します。
+- **本文の出どころ:** `Body.Origin` — `mime`、`mapi`（.msg や TNEF の本文のプロパティ）、`rtf`（圧縮 RTF。.msg
+  ではたいてい `mapi` の本文の写し）、`tnef`（TNEF の旧形式の本文）。
+- **.msg の宛先:** インターネットヘッダがあるとき、To と Cc はヘッダから取ります。ヘッダに載らない Bcc は
+  MAPI の宛先の表から取り（`bcc_from_mapi`）、表にあってヘッダに無いアドレスは知らせます
+  （`mapi_header_mismatch`）。ヘッダも宛先のオブジェクトも無いときは、Outlook の表示用の一覧（名前だけ）を
+  使います。`InReplyTo` と `References` はヘッダから、ヘッダの無い .msg では MAPI から取ります。
+
+## msgtest パッケージ（試験用）
+
+`github.com/nlink-jp/mailparse/msgtest` は、架空の `.msg`・winmail.dat・圧縮 RTF と、その下の複合ファイルを
+組み立てます。利用者は実物のメールをコミットする代わりに、試験の見本を作れます:
+
+```go
+b := msgtest.Message([]msgtest.Prop{msgtest.P(msgtest.PidTagSubject, "Hello")},
+	msgtest.Recipient(0, msgtest.P(msgtest.PidTagRecipientType, uint32(msgtest.RecipientTo)),
+		msgtest.P(msgtest.PidTagSMTPAddress, "bob@example.org")))
+```
+
+組み立てるだけで検査はしません。試験の中だけで使ってください。
+
 ## cfb パッケージ
 
 `github.com/nlink-jp/mailparse/cfb` は Compound File Binary（MS-CFB）— `.msg` と旧形式の Office 文書の入れ物 —
@@ -93,7 +132,7 @@ data, err := f.ReadStream(f.Root.Child("WordDocument"))
 
 | 項目 | 既定 |
 |---|---|
-| `MaxSize` | 30 MiB |
+| `MaxSize` | 64 MiB（25 MB の添付は Base64 で約 34 MB になる） |
 | `MaxMessageDepth` | 入れ子 3 層 |
 | `MaxMIMEDepth` | 32 |
 | `MaxParts` | 全層で 1,000 |

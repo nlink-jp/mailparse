@@ -839,5 +839,5 @@ func (st *state) rtfBody(m *Message, comp []byte, part string, warn func(Warning
 	if x.kind == rtfHTML {
 		mt = "text/html"
 	}
-	m.Bodies = append(m.Bodies, Body{MediaType: mt, Content: x.text, Charset: x.charset, CharsetSource: "rtf", Size: len(data), Part: part})
+	m.Bodies = append(m.Bodies, Body{MediaType: mt, Content: x.text, Charset: x.charset, CharsetSource: "rtf", Size: len(data), Part: part, Origin: "rtf"})
 }

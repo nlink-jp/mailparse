@@ -147,6 +147,13 @@ func (st *state) readHeader(b []byte, part string, warn func(Warning)) (Header, 
 	return h, nil
 }
 
+// Collapsed returns Value with every run of whitespace (folding tabs
+// included) turned into one space — what net/textproto gave. Value itself keeps
+// the folding whitespace RFC 5322 leaves in a field.
+func (f Field) Collapsed() string { return collapse(f.Value) }
+
+func collapse(s string) string { return strings.Join(strings.Fields(s), " ") }
+
 // unfold removes folding (a line break followed by whitespace) and trims.
 func unfold(raw []byte) string {
 	s := strings.ReplaceAll(string(raw), "\r\n", "\n")

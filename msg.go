@@ -29,6 +29,11 @@ const (
 	pidRTFCompressed       = 0x1009
 	pidHTML                = 0x1013
 	pidInternetMessageID   = 0x1035
+	pidInternetReferences  = 0x1039
+	pidInReplyToID         = 0x1042
+	pidDisplayBcc          = 0x0E02
+	pidDisplayCc           = 0x0E03
+	pidDisplayTo           = 0x0E04
 	pidDisplayName         = 0x3001
 	pidEmailAddress        = 0x3003
 	pidAttachData          = 0x3701
@@ -261,14 +266,17 @@ func (r *msgReader) message(dir *cfb.Entry, hdr, depth int, part string) *Messag
 	p.bodyCharset = firstNonEmpty(internetCP, msgCP)
 	p.htmlCharset = p.bodyCharset
 
+	recips := r.recipients(p, dir, part, warn)
 	if raw, ok := p.rawString(pidTransportHeaders); ok && len(strings.TrimSpace(string(raw))) > 0 {
 		h, _ := r.st.readHeader(append(raw, "\r\n\r\n"...), part+"/headers", warn)
 		m.Header = h
 		r.st.fillIdentity(m, warn)
 		compareIdentity(m, p, part, warn)
+		applyRecipients(m, p, recips, true, part, warn)
 	} else {
 		warn(Warning{Code: WarnNoTransportHeaders, Detail: "the message has no internet headers (no Received fields); sender, recipients, subject and date were taken from MAPI properties", Part: part})
-		r.identityFromProps(m, p, dir, part, warn)
+		identityFromProps(m, p, part, warn)
+		applyRecipients(m, p, recips, false, part, warn)
 	}
 
 	r.st.propBodies(m, p, part, warn)
@@ -276,11 +284,10 @@ func (r *msgReader) message(dir *cfb.Entry, hdr, depth int, part string) *Messag
 	return m
 }
 
-// identityFromProps fills the identity fields of a message without transport
-// headers. From is the "sent representing" mailbox Outlook displays; Sender is
-// the mailbox that sent it, kept when it differs.
-func (r *msgReader) identityFromProps(m *Message, p *props, dir *cfb.Entry, part string, warn func(Warning)) {
-	identityFromProps(m, p, part, warn)
+// recipients reads the recipient objects of a .msg message. They are read
+// whether or not the message has internet headers: the recipient table holds
+// what the headers never carry (Bcc) and what Outlook shows.
+func (r *msgReader) recipients(p *props, dir *cfb.Entry, part string, warn func(Warning)) []*props {
 	var recips []*props
 	for _, c := range sortedChildren(dir, recipPrefix) {
 		if c.Type != cfb.TypeStorage {
@@ -290,7 +297,7 @@ func (r *msgReader) identityFromProps(m *Message, p *props, dir *cfb.Entry, part
 		q.charset = p.charset
 		recips = append(recips, q)
 	}
-	setRecipients(m, recips, part, warn)
+	return recips
 }
 
 func cpCharset(p *props, id uint16) string {
@@ -346,6 +353,8 @@ func identityFromProps(m *Message, p *props, part string, warn func(Warning)) {
 	}
 	m.Subject, _ = p.str(pidSubject)
 	m.MessageID, _ = p.str(pidInternetMessageID)
+	m.InReplyTo, _ = p.str(pidInReplyToID)
+	m.References, _ = p.str(pidInternetReferences)
 	if t, ok := p.time(pidClientSubmitTime); ok {
 		m.Date = t
 	} else if t, ok := p.time(pidDeliveryTime); ok {
@@ -353,10 +362,66 @@ func identityFromProps(m *Message, p *props, part string, warn func(Warning)) {
 	}
 }
 
-// setRecipients sorts recipient objects into To, Cc and Bcc by
+// applyRecipients sets To, Cc and Bcc from MAPI recipients (.msg recipient
+// objects, the TNEF recipient table). Without internet headers they are the
+// source; with none either, the display lists Outlook keeps (PidTagDisplayTo,
+// -Cc, -Bcc: names only) are used and that is warned about. With headers, the
+// headers stay authoritative for To and Cc; Bcc, which headers do not carry,
+// comes from the table, and a table address missing from To and Cc is
+// reported — Outlook shows the table.
+func applyRecipients(m *Message, p *props, recips []*props, haveHeaders bool, part string, warn func(Warning)) {
+	to, cc, bcc := classifyRecipients(recips, warn)
+	if !haveHeaders {
+		if len(recips) == 0 {
+			to, cc, bcc = displayList(p, pidDisplayTo), displayList(p, pidDisplayCc), displayList(p, pidDisplayBcc)
+			if len(to)+len(cc)+len(bcc) > 0 {
+				warn(Warning{Code: WarnRecipientType, Detail: "no recipient objects; To, Cc and Bcc were taken from the display lists (names only)", Part: part})
+			}
+			m.To, m.Cc, m.Bcc = to, cc, bcc
+			return
+		}
+		m.To, m.Cc, m.Bcc = joinLists(to), joinLists(cc), joinLists(bcc)
+		return
+	}
+	if len(m.Bcc) == 0 && len(bcc) > 0 {
+		m.Bcc = joinLists(bcc)
+		warn(Warning{Code: WarnBccFromMAPI, Detail: "the headers carry no Bcc; Bcc was taken from the MAPI recipient table", Part: part})
+	}
+	inHeaders := map[string]bool{}
+	for _, l := range append(append([]AddressList{}, m.To...), m.Cc...) {
+		for _, mb := range l.Mailboxes {
+			inHeaders[strings.ToLower(mb.Address)] = true
+		}
+	}
+	for _, l := range append(to, cc...) {
+		for _, mb := range l.Mailboxes {
+			if mb.Address != "" && !inHeaders[strings.ToLower(mb.Address)] {
+				warn(Warning{Code: WarnHeaderMismatch, Detail: "the MAPI recipient table holds a To or Cc address the headers do not", Part: part})
+				return
+			}
+		}
+	}
+}
+
+// displayList reads a PidTagDisplayTo/Cc/Bcc value: display names separated
+// by semicolons, with no addresses.
+func displayList(p *props, id uint16) []AddressList {
+	s, ok := p.str(id)
+	if !ok || strings.TrimSpace(s) == "" {
+		return nil
+	}
+	l := AddressList{Raw: s, Mailboxes: []Mailbox{}}
+	for _, name := range strings.Split(s, ";") {
+		if name = strings.TrimSpace(name); name != "" {
+			l.Mailboxes = append(l.Mailboxes, Mailbox{Name: name})
+		}
+	}
+	return []AddressList{l}
+}
+
+// classifyRecipients sorts recipient objects into To, Cc and Bcc by
 // PidTagRecipientType.
-func setRecipients(m *Message, recips []*props, part string, warn func(Warning)) {
-	var to, cc, bcc []AddressList
+func classifyRecipients(recips []*props, warn func(Warning)) (to, cc, bcc []AddressList) {
 	for _, q := range recips {
 		mb := mapiMailbox(q, pidDisplayName, pidEmailAddress, pidSMTPAddress, q.part, warn)
 		if mb.Raw == "" {
@@ -376,7 +441,7 @@ func setRecipients(m *Message, recips []*props, part string, warn func(Warning))
 			to = append(to, mb)
 		}
 	}
-	m.To, m.Cc, m.Bcc = joinLists(to), joinLists(cc), joinLists(bcc)
+	return to, cc, bcc
 }
 
 // mapiMailbox builds an address list of one mailbox from a display name, an
@@ -459,18 +524,21 @@ func (st *state) propBodies(m *Message, p *props, part string, warn func(Warning
 		for len(b) >= 2 && b[len(b)-1] == 0 && b[len(b)-2] == 0 {
 			b = b[:len(b)-2]
 		}
-		m.Bodies = append(m.Bodies, Body{MediaType: "text/plain", Content: utf16String(b), Charset: "utf-16le", CharsetSource: "unicode", Size: len(b), Part: part + "/body"})
+		m.Bodies = append(m.Bodies, Body{MediaType: "text/plain", Content: utf16String(b), Charset: "utf-16le", CharsetSource: "unicode", Size: len(b), Part: part + "/body", Origin: "mapi"})
 	} else if b, ok := p.rawString(pidBody); ok {
 		r := decodeText("text/plain", bodyCS, "codepage", b, part+"/body", warn)
-		m.Bodies = append(m.Bodies, Body{MediaType: "text/plain", Content: r.content, Charset: r.charset, CharsetSource: r.source, Size: len(b), Part: part + "/body"})
+		m.Bodies = append(m.Bodies, Body{MediaType: "text/plain", Content: r.content, Charset: r.charset, CharsetSource: r.source, Size: len(b), Part: part + "/body", Origin: "mapi"})
 	}
 	html, ok := p.binary(pidHTML)
 	if !ok {
 		html, ok = p.rawString(pidHTML)
 	}
 	if ok {
-		r := decodeText("text/html", firstNonEmpty(p.htmlCharset, bodyCS), "codepage", trimNUL(html), part+"/html", warn)
-		m.Bodies = append(m.Bodies, Body{MediaType: "text/html", Content: r.content, Charset: r.charset, CharsetSource: r.source, Size: len(html), Part: part + "/html"})
+		// Trailing NULs are dropped after decoding: in UTF-16 a NUL byte can be
+		// half of a character.
+		r := decodeText("text/html", firstNonEmpty(p.htmlCharset, bodyCS), "codepage", html, part+"/html", warn)
+		r.content = strings.TrimRight(r.content, "\x00")
+		m.Bodies = append(m.Bodies, Body{MediaType: "text/html", Content: r.content, Charset: r.charset, CharsetSource: r.source, Size: len(html), Part: part + "/html", Origin: "mapi"})
 	}
 	if rtf, ok := p.binary(pidRTFCompressed); ok {
 		st.rtfBody(m, rtf, part+"/rtf", warn)

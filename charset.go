@@ -88,6 +88,9 @@ func toUTF8(mediaType, declared string, data []byte, part string, warn func(Warn
 // for a MIME charset parameter, "codepage" for a .msg or TNEF code page, "rtf"
 // for an RTF \ansicpg or \fcharset.
 func decodeText(mediaType, declared, source string, data []byte, part string, warn func(Warning)) textResult {
+	if r, ok := decodeBOM(declared, data, part, warn); ok {
+		return r
+	}
 	ascii := isASCII(data)
 	if d := normalizeCharset(declared); d != "" {
 		switch d {
@@ -194,4 +197,43 @@ func metaCharset(data []byte) string {
 			}
 		}
 	}
+}
+
+// boms are the byte order marks a text may start with, longest first.
+var boms = []struct {
+	mark    []byte
+	charset string
+}{
+	{[]byte{0xEF, 0xBB, 0xBF}, "utf-8"},
+	{[]byte{0xFF, 0xFE}, "utf-16le"},
+	{[]byte{0xFE, 0xFF}, "utf-16be"},
+}
+
+// decodeBOM decodes text that starts with a byte order mark, which wins over a
+// declared charset (as in the HTML standard); a declaration that disagrees is
+// warned about. The mark itself is not part of the text.
+func decodeBOM(declared string, data []byte, part string, warn func(Warning)) (textResult, bool) {
+	for _, b := range boms {
+		if !bytes.HasPrefix(data, b.mark) {
+			continue
+		}
+		if d := normalizeCharset(declared); d != "" && d != b.charset && (d != "us-ascii" || b.charset != "utf-8") {
+			warn(Warning{Code: WarnCharsetMismatch, Detail: "the declared " + safeToken(d) + " disagrees with the byte order mark; " + b.charset + " was used", Part: part})
+		}
+		rest := data[len(b.mark):]
+		if b.charset == "utf-8" {
+			if !utf8.Valid(rest) {
+				warn(Warning{Code: WarnUndecodableText, Detail: "text marked UTF-8 by its byte order mark holds invalid bytes; they were replaced", Part: part})
+			}
+			return textResult{strings.ToValidUTF8(string(rest), "\uFFFD"), "utf-8", "bom"}, true
+		}
+		enc, _ := htmlindex.Get(b.charset)
+		if s, ok := decodeStrict(enc, rest); ok {
+			return textResult{s, b.charset, "bom"}, true
+		}
+		s, _ := enc.NewDecoder().Bytes(rest)
+		warn(Warning{Code: WarnUndecodableText, Detail: "text marked " + b.charset + " by its byte order mark holds invalid sequences; they were replaced", Part: part})
+		return textResult{strings.ToValidUTF8(string(s), "\uFFFD"), b.charset, "bom"}, true
+	}
+	return textResult{}, false
 }

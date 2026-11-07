@@ -33,6 +33,8 @@ const (
 	WarnCharsetGuessed      = "charset_guessed"           // no charset was declared for non-ASCII text; it was guessed
 	WarnUndecodableText     = "undecodable_text"          // text could not be decoded by any candidate; invalid bytes were replaced
 
+	WarnNotDetected = "not_detected_as_mail" // Detect did not recognize the input; it was read as RFC 5322 because Options.AssumeEML is set
+
 	// .msg and TNEF.
 	WarnCFBDamaged             = "cfb_damaged"              // the compound file structure was damaged (a loop, an out-of-range sector, a short stream); what was readable was kept
 	WarnMSGStructure           = "msg_structure"            // a .msg storage lacked a stream the format requires, or a property stream was cut
@@ -44,7 +46,8 @@ const (
 	WarnWarningLimit           = "warning_limit"            // one warning code repeated more than 100 times in a message; the rest were counted out, not recorded
 	WarnAddressMismatch        = "mapi_address_mismatch"    // a .msg/TNEF mailbox shows one address and carries a different SMTP address; Address holds the SMTP one
 	WarnHeaderMismatch         = "mapi_header_mismatch"     // the MAPI sender or subject Outlook displays differs from the internet headers that were used
-	WarnRecipientType          = "recipient_type"           // a recipient had no known type (To, Cc, Bcc) and was read as To, or had no name or address and was skipped
+	WarnRecipientType          = "recipient_type"           // a recipient had no known type (To, Cc, Bcc) and was read as To, had no name or address and was skipped, or only display lists were there
+	WarnBccFromMAPI            = "bcc_from_mapi"            // a .msg/TNEF with internet headers carries Bcc only in its MAPI recipient table; Bcc was taken from there
 	WarnTNEFDamaged            = "tnef_damaged"             // a TNEF stream was cut, had a bad checksum, an unknown level or a broken property list; what was readable was kept
 )
 

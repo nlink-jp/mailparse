@@ -10,7 +10,7 @@ Module path: `github.com/nlink-jp/mailparse`. Design authority:
 [docs/ja/mailparse-rfp.ja.md](docs/ja/mailparse-rfp.ja.md) (English beside it); the comparison with the three
 existing util-series parsers and the measured defects: [docs/ja/mailparse-phase0.ja.md](docs/ja/mailparse-phase0.ja.md).
 
-**Status: v0.1.0 released. The API is v0.x until mail-dissect (first consumer) settles it.**
+**Status: v0.2.0. The API is v0.x until its consumers (mail-dissect, the four util-series mail tools) settle it.**
 
 ## Build / test
 
@@ -37,11 +37,12 @@ charset.go    Declared charset, HTML <meta charset> (x/net/html tokenizer), Japa
 warnings.go   Warning codes
 codepage.go   Windows code page -> charset (incl. 50220-50222, 51932)
 params.go     Lenient Content-Type / Content-Disposition parameters (RFC 2231 in any charset); replaces mime.ParseMediaType
+api.go        Consumer helpers: Attachment.Text, Message.Walk, Message.AllWarnings
 msg.go        .msg (MS-OXMSG): property streams, transport headers or MAPI identity, bodies, attachments, embedded
 rtf.go        Compressed RTF (MS-OXRTFCP) and de-encapsulation / text extraction (MS-OXRTFEX), explicit group stack
 tnef.go       TNEF (MS-OXTNEF): attributes with checksums, encapsulated MAPI property lists, recipient table, attachments
+msgtest/      Exported test support: builders for .msg, TNEF, compressed RTF, compound files (used by our own tests)
 cfb/          Exported MS-CFB reader (FAT/DIFAT/mini-FAT, directory tree; loops and ranges cut)
-internal/cfbtest/ Test-only CFB writer with the sector map, to build and damage fixtures
 testdata/eml/ The Phase 0 fixtures (fictional; byte-exact Japanese encodings)
 docs/{en,ja}/ RFP and the Phase 0 record
 ```
@@ -68,6 +69,9 @@ docs/{en,ja}/ RFP and the Phase 0 record
   and attachments are filled from it by the same functions (`identityFromProps`, `propBodies`, `mapiAttachment`).
 - **TNEF has no real sample yet**: only spec-built fixtures. Measure on a real winmail.dat when one is available.
 - **`make lint` checks gofmt itself**: golangci-lint here does not.
+- **Consumers reimplemented the same things when the API lacked them** (v0.2.0, issues #1–#10): before adding a
+  field, ask what a consumer would otherwise have to rebuild — a safe formatter, a charset conversion, a walk.
+- **msgtest must not import mailparse** (mailparse's tests import msgtest); its own tests are an external package.
 - **Warnings go through `warner(m)`** (capped at 100 per code); never append to `m.Warnings` directly.
 - **Never use `mime.ParseMediaType` for parameters**: one bad parameter makes it drop all of them (an attacker
   hides the filename that way) and it decodes RFC 2231 only for UTF-8/US-ASCII. Use `parseParams`.

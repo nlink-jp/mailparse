@@ -40,7 +40,7 @@ func TestMessageReadsBack(t *testing.T) {
 	if m.Subject != "Hello" || !m.Date.Equal(sent) || m.From[0].Mailboxes[0].Address != "alice@example.com" || m.To[0].Mailboxes[0].Address != "bob@example.org" {
 		t.Fatalf("%+v", m)
 	}
-	if len(m.Bodies) != 2 || m.Bodies[0].Content != "plain" || m.Bodies[1].Part != "msg/rtf" {
+	if len(m.Bodies) != 2 || m.Bodies[0].Content != "plain" || m.Bodies[1].Origin != "rtf" {
 		t.Fatalf("%+v", m.Bodies)
 	}
 	if len(m.Attachments) != 2 || string(m.Attachments[0].Data) != "data" || m.Attachments[1].Message.Subject != "inner" {
