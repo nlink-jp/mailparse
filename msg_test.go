@@ -14,7 +14,7 @@ import (
 	"golang.org/x/text/encoding/htmlindex"
 	"golang.org/x/text/encoding/japanese"
 
-	"github.com/nlink-jp/mailparse/internal/cfbtest"
+	"github.com/nlink-jp/mailparse/msgtest"
 )
 
 func enc(e encoding.Encoding, s string) s8 {
@@ -232,7 +232,7 @@ func TestMSGDepthLimit(t *testing.T) {
 
 func TestMSGDamaged(t *testing.T) {
 	t.Run("no property stream at the root", func(t *testing.T) {
-		b, _ := cfbtest.Build(3, cfbtest.Stream("__substg1.0_0037001F", u16le("x")), recip(0, mapi{pidDisplayName, "x"}))
+		b, _ := msgtest.Build(3, msgtest.Stream("__substg1.0_0037001F", u16le("x")), recip(0, mapi{pidDisplayName, "x"}))
 		if Detect(b) != FormatMSG {
 			t.Fatal("not detected")
 		}
@@ -254,8 +254,8 @@ func TestMSGDamaged(t *testing.T) {
 	})
 	t.Run("short property stream", func(t *testing.T) {
 		b := buildMSG([]mapi{{pidSubject, "s"}},
-			cfbtest.Dir(attachPrefix+"00000000", cfbtest.Stream(propsStream, []byte{1, 2, 3}), cfbtest.Stream("__substg1.0_37010102", []byte("data"))),
-			cfbtest.Dir(attachPrefix+"00000001", cfbtest.Stream("__substg1.0_37010102", []byte("orphan"))),
+			msgtest.Dir(attachPrefix+"00000000", msgtest.Stream(propsStream, []byte{1, 2, 3}), msgtest.Stream("__substg1.0_37010102", []byte("data"))),
+			msgtest.Dir(attachPrefix+"00000001", msgtest.Stream("__substg1.0_37010102", []byte("orphan"))),
 		)
 		m, err := ParseBytes(b, Options{})
 		if err != nil {
@@ -282,7 +282,7 @@ func TestMSGDamaged(t *testing.T) {
 }
 
 func TestMSGLimits(t *testing.T) {
-	var atts []*cfbtest.Node
+	var atts []*msgtest.Node
 	for i := range 4 {
 		atts = append(atts, attach(i, []mapi{{pidAttachData, bytes.Repeat([]byte{byte('a' + i)}, 5000)}}))
 	}
@@ -361,7 +361,7 @@ func TestMSGReviewFindings(t *testing.T) {
 		}
 	})
 	t.Run("many recipients are not cut", func(t *testing.T) {
-		var rs []*cfbtest.Node
+		var rs []*msgtest.Node
 		for i := range 1100 {
 			rs = append(rs, recip(i, mapi{pidRecipientType, uint32(1)}, mapi{pidSMTPAddress, fmt.Sprintf("r%d@example.org", i)}))
 		}
@@ -395,7 +395,7 @@ func TestMSGReviewFindings(t *testing.T) {
 		}
 	})
 	t.Run("warnings are capped per code", func(t *testing.T) {
-		var rs []*cfbtest.Node
+		var rs []*msgtest.Node
 		for i := range 300 {
 			rs = append(rs, recip(i, mapi{pidRecipientType, uint32(9)}, mapi{pidSMTPAddress, "x@example.org"}))
 		}

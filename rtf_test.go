@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/nlink-jp/mailparse/msgtest"
 	"strings"
 	"testing"
 )
@@ -18,27 +19,8 @@ func unhexs(t *testing.T, s string) []byte {
 	return b
 }
 
-// compressLiteral writes raw as a valid LZFu stream that uses only literals,
-// ended by the end marker (a reference to the write offset).
-func compressLiteral(raw []byte) []byte {
-	var body []byte
-	wp := len(rtfDictionaryInit)
-	for i := 0; ; {
-		ctrl := len(body)
-		body = append(body, 0)
-		for bit := 0; bit < 8; bit++ {
-			if i == len(raw) {
-				body[ctrl] |= 1 << bit
-				ref := uint16(wp%4096) << 4
-				body = append(body, byte(ref>>8), byte(ref))
-				return rtfHeader(body, len(raw), rtfCompressed, rtfCRC(body))
-			}
-			body = append(body, raw[i])
-			i++
-			wp++
-		}
-	}
-}
+// compressLiteral writes raw as a valid LZFu stream (msgtest.CompressRTF).
+func compressLiteral(raw []byte) []byte { return msgtest.CompressRTF(raw) }
 
 func rtfHeader(body []byte, raw int, typ, crc uint32) []byte {
 	h := make([]byte, 16, 16+len(body))

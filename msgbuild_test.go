@@ -1,95 +1,43 @@
 package mailparse
 
 import (
-	"encoding/binary"
-	"fmt"
-	"time"
-	"unicode/utf16"
-
-	"github.com/nlink-jp/mailparse/internal/cfbtest"
+	"github.com/nlink-jp/mailparse/msgtest"
 )
 
-// Test values for building .msg files from MS-OXMSG: a property is a tag and a
-// Go value whose type picks the MAPI type.
+// The tests build .msg files with the exported msgtest package; these short
+// names keep the test tables readable.
 type (
-	s8   []byte // PtypString8, stored as written (no terminator added)
-	mapi struct {
+	s8   = msgtest.String8 // PtypString8, stored as written (a NUL is added)
+	mapi struct {          // {id, value}: the Go type of the value picks the MAPI type
 		id  uint16
-		val any // string (PtypString), s8, []byte (PtypBinary), uint32, bool, time.Time
+		val any
 	}
 )
 
-func u16le(s string) []byte {
-	u := utf16.Encode([]rune(s))
-	b := make([]byte, 2*len(u)+2)
-	for i, c := range u {
-		binary.LittleEndian.PutUint16(b[2*i:], c)
+func toProps(ps []mapi) []msgtest.Prop {
+	out := make([]msgtest.Prop, len(ps))
+	for i, p := range ps {
+		out[i] = msgtest.P(p.id, p.val)
 	}
-	return b
+	return out
 }
 
-func filetime(t time.Time) uint64 { return uint64(t.UnixNano()/100) + filetimeEpoch }
+func u16le(s string) []byte { return msgtest.UTF16(s) }
 
-// msgObject returns the streams of one MS-OXMSG object: its property stream
-// (with a header of hdr bytes) and one __substg1.0_ stream per variable-length
-// value, followed by extra children (recipient, attachment, embedded storages).
-func msgObject(hdr int, ps []mapi, extra ...*cfbtest.Node) []*cfbtest.Node {
-	stream := make([]byte, hdr)
-	var nodes []*cfbtest.Node
-	for _, p := range ps {
-		var typ uint16
-		var val [8]byte
-		var data []byte
-		switch v := p.val.(type) {
-		case string:
-			typ, data = ptUnicode, u16le(v)
-		case s8:
-			typ, data = ptString8, append([]byte(v), 0)
-		case []byte:
-			typ, data = ptBinary, v
-		case uint32:
-			typ = ptInt32
-			binary.LittleEndian.PutUint32(val[:], v)
-		case bool:
-			typ = ptBoolean
-			if v {
-				val[0] = 1
-			}
-		case time.Time:
-			typ = ptTime
-			binary.LittleEndian.PutUint64(val[:], filetime(v))
-		default:
-			panic(fmt.Sprintf("unsupported test value %T", v))
-		}
-		tag := uint32(p.id)<<16 | uint32(typ)
-		if data != nil {
-			binary.LittleEndian.PutUint32(val[:], uint32(len(data)))
-			nodes = append(nodes, cfbtest.Stream(fmt.Sprintf("__substg1.0_%08X", tag), data))
-		}
-		var e [16]byte
-		binary.LittleEndian.PutUint32(e[0:], tag)
-		binary.LittleEndian.PutUint32(e[4:], 6) // PROPATTR_READABLE | PROPATTR_WRITABLE
-		copy(e[8:], val[:])
-		stream = append(stream, e[:]...)
-	}
-	nodes = append(nodes, cfbtest.Stream(propsStream, stream))
-	return append(nodes, extra...)
+func msgObject(hdr int, ps []mapi, extra ...*msgtest.Node) []*msgtest.Node {
+	return msgtest.Object(hdr, toProps(ps), extra...)
 }
 
-func recip(i int, ps ...mapi) *cfbtest.Node {
-	return cfbtest.Dir(fmt.Sprintf("%s%08X", recipPrefix, i), msgObject(8, ps)...)
+func recip(i int, ps ...mapi) *msgtest.Node { return msgtest.Recipient(i, toProps(ps)...) }
+
+func attach(i int, ps []mapi, extra ...*msgtest.Node) *msgtest.Node {
+	return msgtest.Attachment(i, toProps(ps), extra...)
 }
 
-func attach(i int, ps []mapi, extra ...*cfbtest.Node) *cfbtest.Node {
-	return cfbtest.Dir(fmt.Sprintf("%s%08X", attachPrefix, i), msgObject(8, ps, extra...)...)
+func embedded(ps []mapi, extra ...*msgtest.Node) *msgtest.Node {
+	return msgtest.Embedded(toProps(ps), extra...)
 }
 
-func embedded(ps []mapi, extra ...*cfbtest.Node) *cfbtest.Node {
-	return cfbtest.Dir(embeddedMessageStorage, msgObject(24, ps, extra...)...)
-}
-
-// buildMSG builds a top-level .msg (version 3 compound file).
-func buildMSG(ps []mapi, extra ...*cfbtest.Node) []byte {
-	b, _ := cfbtest.Build(3, msgObject(32, ps, extra...)...)
-	return b
+func buildMSG(ps []mapi, extra ...*msgtest.Node) []byte {
+	return msgtest.Message(toProps(ps), extra...)
 }

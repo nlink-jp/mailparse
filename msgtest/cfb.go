@@ -1,8 +1,14 @@
-// Package cfbtest builds compound files (MS-CFB) for tests: a small writer that
-// lays out a tree of storages and streams the way the specification describes,
-// plus the sector map tests need to damage the result on purpose. It is used by
-// tests only; the library itself never writes a compound file.
-package cfbtest
+// Package msgtest builds Outlook .msg files, winmail.dat (TNEF) streams and
+// the compound files (MS-CFB) under them, for tests — so a consumer of
+// mailparse can make fictional .msg fixtures instead of committing real
+// messages, which hold real addresses and text. It follows the published
+// specifications (MS-CFB, MS-OXMSG, MS-OXTNEF, MS-OXRTFCP) and is what
+// mailparse's own tests use.
+//
+// It writes; it does not check. Its output is meant to be read by mailparse
+// (or any reader under test). It is test support: keep it out of production
+// code paths.
+package msgtest
 
 import (
 	"encoding/binary"

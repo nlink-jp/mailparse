@@ -11,6 +11,8 @@ import (
 
 	"golang.org/x/text/encoding/charmap"
 	"golang.org/x/text/encoding/japanese"
+
+	"github.com/nlink-jp/mailparse/msgtest"
 )
 
 // TNEF built from MS-OXTNEF for tests.
@@ -26,74 +28,19 @@ type tprop struct {
 
 func le32b(v uint32) []byte { b := make([]byte, 4); binary.LittleEndian.PutUint32(b, v); return b }
 
-func pad4(b []byte) []byte {
-	for len(b)%4 != 0 {
-		b = append(b, 0)
-	}
-	return b
-}
-
 func tnefPropList(ps ...tprop) []byte {
-	out := le32b(uint32(len(ps)))
-	for _, p := range ps {
-		out = append(out, le32b(p.tag)...)
-		if p.tag>>16 >= 0x8000 {
-			out = append(out, bytes.Repeat([]byte{0xAB}, 16)...) // a GUID
-			if p.nameStr != "" {
-				name := u16le(p.nameStr)
-				out = append(out, le32b(1)...)
-				out = append(out, le32b(uint32(len(name)))...)
-				out = append(out, pad4(name)...)
-			} else {
-				out = append(out, le32b(0)...)
-				out = append(out, le32b(p.nameID)...)
-			}
-		}
-		switch v := p.val.(type) {
-		case []byte:
-			out = append(out, le32b(1)...)
-			out = append(out, le32b(uint32(len(v)))...)
-			out = append(out, pad4(append([]byte{}, v...))...)
-		case [][]byte:
-			out = append(out, le32b(uint32(len(v)))...)
-			for _, x := range v {
-				out = append(out, le32b(uint32(len(x)))...)
-				out = append(out, pad4(append([]byte{}, x...))...)
-			}
-		case uint32:
-			out = append(out, le32b(v)...)
-		case uint16:
-			out = append(out, pad4(binary.LittleEndian.AppendUint16(nil, v))...)
-		case bool:
-			x := uint16(0)
-			if v {
-				x = 1
-			}
-			out = append(out, pad4(binary.LittleEndian.AppendUint16(nil, x))...)
-		case time.Time:
-			out = append(out, binary.LittleEndian.AppendUint64(nil, filetime(v))...)
-		}
+	out := make([]msgtest.TNEFProp, len(ps))
+	for i, p := range ps {
+		out[i] = msgtest.TNEFProp{Tag: p.tag, Value: p.val, NameID: p.nameID, NameString: p.nameStr}
 	}
-	return out
+	return msgtest.TNEFProps(out...)
 }
 
-func tag(id, typ uint16) uint32 { return uint32(id)<<16 | uint32(typ) }
+func tag(id, typ uint16) uint32 { return msgtest.Tag(id, typ) }
 
-func tnefAttr(level byte, id uint32, data []byte) []byte {
-	out := []byte{level}
-	out = append(out, le32b(id)...)
-	out = append(out, le32b(uint32(len(data)))...)
-	out = append(out, data...)
-	return binary.LittleEndian.AppendUint16(out, tnefChecksum(data))
-}
+func tnefAttr(level byte, id uint32, data []byte) []byte { return msgtest.TNEFAttr(level, id, data) }
 
-func tnefStream(attrs ...[]byte) []byte {
-	out := append(le32b(tnefSignature), 0x01, 0x00)
-	for _, a := range attrs {
-		out = append(out, a...)
-	}
-	return out
-}
+func tnefStream(attrs ...[]byte) []byte { return msgtest.TNEF(attrs...) }
 
 func sampleTNEF() []byte {
 	sj := japanese.ShiftJIS

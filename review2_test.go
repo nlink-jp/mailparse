@@ -7,16 +7,16 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/nlink-jp/mailparse/internal/cfbtest"
+	"github.com/nlink-jp/mailparse/msgtest"
 )
 
 func TestSecondReviewFindings(t *testing.T) {
 	t.Run("cfb issues go through the warning cap", func(t *testing.T) {
-		var nodes []*cfbtest.Node
+		var nodes []*msgtest.Node
 		for i := range 400 {
-			nodes = append(nodes, cfbtest.Stream(fmt.Sprintf("s%03d", i), []byte("x")))
+			nodes = append(nodes, msgtest.Stream(fmt.Sprintf("s%03d", i), []byte("x")))
 		}
-		b, lay := cfbtest.Build(3, append(msgObject(32, []mapi{{pidSubject, "x"}}), nodes...)...)
+		b, lay := msgtest.Build(3, append(msgObject(32, []mapi{{pidSubject, "x"}}), nodes...)...)
 		for i := range 400 { // every stream claims mini sector 0
 			binary.LittleEndian.PutUint32(b[lay.EntryOffset(lay.IDs[fmt.Sprintf("/s%03d", i)])+116:], 0)
 		}
