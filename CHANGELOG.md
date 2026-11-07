@@ -28,6 +28,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   attachments with bytes; embedded messages (also inside an .eml); 8-bit strings
   by code page, including ISO-2022-JP (50220-50222) and EUC-JP (51932);
   `ParseMSG`.
+- Compressed RTF in .msg (MS-OXRTFCP): LZFu expansion bounded by RAWSIZE and
+  the remaining decoded budget; a CRC mismatch is warned about and the output
+  kept. HTML or plain text encapsulated by Outlook (MS-OXRTFEX) is recovered,
+  with `\ansicpg`, per-font `\fcharset` / `\cpg`, `\'hh` and `\uN`; plain RTF
+  gives its visible text.
 
 ### Fixed
 

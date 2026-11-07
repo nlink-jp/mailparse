@@ -197,6 +197,7 @@ func FuzzParseBytes(f *testing.F) {
 	f.Add([]byte(multipartOf(3)))
 	f.Add([]byte(nest(hdr+"\r\nx", 4)))
 	f.Add(sampleMSG())
+	f.Add(buildMSG([]mapi{{pidSubject, "r"}, {pidRTFCompressed, compressLiteral([]byte(specExampleRTF))}}))
 	opt := Options{MaxSize: 1 << 20, MaxParts: 200, MaxDecoded: 1 << 20, MaxHeaders: 200, MaxHeaderBytes: 64 << 10}
 	f.Fuzz(func(t *testing.T, b []byte) {
 		m, err := ParseBytes(b, opt)

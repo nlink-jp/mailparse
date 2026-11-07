@@ -16,8 +16,8 @@ It is written for messages composed by an attacker:
 - **Limits** on size, nesting, part count and decoded bytes are shared across one parse, nested messages
   included. It never panics on input; fuzz tests hold it to that.
 
-> Status: in development (v0.x, not yet released). `.eml` and Outlook `.msg` are supported; compressed RTF and
-> winmail.dat (TNEF) are being added.
+> Status: in development (v0.x, not yet released). `.eml` and Outlook `.msg` (with compressed RTF) are supported;
+> winmail.dat (TNEF) is being added.
 
 [日本語版 README](README.ja.md)
 
@@ -49,7 +49,9 @@ charsets (declared, HTML `<meta charset>`, or guessed for undeclared Japanese), 
 
 From a `.msg`: the internet headers Outlook kept (`PR_TRANSPORT_MESSAGE_HEADERS`), else the sender, recipients,
 subject and date from MAPI properties with a `no_transport_headers` warning (such a message has no Received
-fields); every body it holds (text and HTML — an attacker can make them differ); attachments with their bytes;
+fields); every body it holds — text, HTML, and the compressed RTF (MS-OXRTFCP) with the HTML or text Outlook
+encapsulated in it (MS-OXRTFEX) or the visible text of plain RTF — since an attacker can make them differ (a CRC
+mismatch is warned about and the text kept as evidence); attachments with their bytes;
 embedded messages; 8-bit strings decoded with the message code page, including ISO-2022-JP (50220-50222) and
 EUC-JP (51932). Exchange `/O=...` addresses stay in `Raw`.
 

@@ -53,3 +53,25 @@ var codePageCharsets = map[uint32]string{
 
 // codePageCharset returns the charset name for a code page, or "".
 func codePageCharset(cp uint32) string { return codePageCharsets[cp] }
+
+// fontCharsetCodePage maps an RTF \fcharset value to a code page (the
+// Windows CHARSET_* constants).
+var fontCharsetCodePage = map[int]uint32{
+	0:   1252, // ANSI
+	2:   0,    // SYMBOL: not text
+	77:  10000,
+	128: 932,  // SHIFTJIS
+	129: 949,  // HANGUL
+	134: 936,  // GB2312
+	136: 950,  // CHINESEBIG5
+	161: 1253, // GREEK
+	162: 1254, // TURKISH
+	163: 1258, // VIETNAMESE
+	177: 1255, // HEBREW
+	178: 1256, // ARABIC
+	186: 1257, // BALTIC
+	204: 1251, // RUSSIAN
+	222: 874,  // THAI
+	238: 1250, // EASTEUROPE
+	255: 437,  // OEM
+}

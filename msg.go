@@ -397,6 +397,9 @@ func (st *state) propBodies(m *Message, p *props, part string, warn func(Warning
 		r := decodeText("text/html", p.charset, "codepage", trimNUL(html), part+"/html", warn)
 		m.Bodies = append(m.Bodies, Body{MediaType: "text/html", Content: r.content, Charset: r.charset, CharsetSource: r.source, Size: len(html), Part: part + "/html"})
 	}
+	if rtf, ok := p.binary(pidRTFCompressed); ok {
+		st.rtfBody(m, rtf, part+"/rtf", warn)
+	}
 }
 
 // attachments reads the attachment storages of a message object.

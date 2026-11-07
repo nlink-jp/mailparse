@@ -37,6 +37,8 @@ const (
 	WarnNoTransportHeaders     = "no_transport_headers"     // a .msg had no internet headers; identity fields came from MAPI properties
 	WarnAttachmentNotExtracted = "attachment_not_extracted" // an attachment held no bytes to extract (OLE storage, a reference to a file)
 	WarnNestedUnreadable       = "nested_unreadable"        // an attached message was recognized but could not be read; it stays an attachment
+	WarnRTFCRC                 = "rtf_crc_mismatch"         // compressed RTF failed its CRC check; the expanded text was kept as evidence
+	WarnRTFDamaged             = "rtf_damaged"              // compressed RTF was cut, had an unknown type or did not expand to RTF
 )
 
 // Warning is one thing a parse met and handled.

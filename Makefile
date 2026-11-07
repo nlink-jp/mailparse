@@ -13,8 +13,9 @@ test:
 vet:
 	go vet ./...
 
-## lint: golangci-lint — run before every commit
+## lint: gofmt and golangci-lint — run before every commit
 lint:
+	@test -z "$$(gofmt -l $(CURDIR))" || { gofmt -l $(CURDIR); echo "gofmt needed"; exit 1; }
 	golangci-lint run ./...
 
 ## fuzz: explore beyond the seeds for a while (FUZZTIME per target, default 60s).
@@ -24,6 +25,7 @@ FUZZTIME ?= 60s
 FUZZFLAGS = -run '^$$' -fuzztime $(FUZZTIME) -fuzzminimizetime 1x
 fuzz:
 	go test $(FUZZFLAGS) -fuzz '^FuzzParseBytes$$' .
+	go test $(FUZZFLAGS) -fuzz '^FuzzRTF$$' .
 	go test $(FUZZFLAGS) -fuzz '^FuzzOpen$$' ./cfb
 
 check: lint test

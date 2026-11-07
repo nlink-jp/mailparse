@@ -10,7 +10,7 @@ Module path: `github.com/nlink-jp/mailparse`. Design authority:
 [docs/ja/mailparse-rfp.ja.md](docs/ja/mailparse-rfp.ja.md) (English beside it); the comparison with the three
 existing util-series parsers and the measured defects: [docs/ja/mailparse-phase0.ja.md](docs/ja/mailparse-phase0.ja.md).
 
-**Status: in development. Phase 1 (.eml) done; Phase 2 in progress — CFB and .msg done, compressed RTF and TNEF next.**
+**Status: in development. Phase 1 (.eml) done; Phase 2 in progress — CFB, .msg and compressed RTF done, TNEF next.**
 
 ## Build / test
 
@@ -37,6 +37,7 @@ charset.go    Declared charset, HTML <meta charset> (x/net/html tokenizer), Japa
 warnings.go   Warning codes
 codepage.go   Windows code page -> charset (incl. 50220-50222, 51932)
 msg.go        .msg (MS-OXMSG): property streams, transport headers or MAPI identity, bodies, attachments, embedded
+rtf.go        Compressed RTF (MS-OXRTFCP) and de-encapsulation / text extraction (MS-OXRTFEX), explicit group stack
 cfb/          Exported MS-CFB reader (FAT/DIFAT/mini-FAT, directory tree; loops and ranges cut)
 internal/cfbtest/ Test-only CFB writer with the sector map, to build and damage fixtures
 testdata/eml/ The Phase 0 fixtures (fictional; byte-exact Japanese encodings)
@@ -59,13 +60,17 @@ docs/{en,ja}/ RFP and the Phase 0 record
 - **Every .msg stream read is charged to MaxDecoded before it happens** (`msgReader.read`): directory entries can
   all point at one large chain, so an unbudgeted read multiplies the work.
 - **ISO-2022-JP is 7-bit** and passes for ASCII and UTF-8; `decodeText` tries its escapes first.
+- **RTF code pages: HTMLTAG content uses the document default (`\ansicpg`); text outside it uses the current
+  font's code page** (MS-OXRTFEX, "Extracting Encapsulated HTML from RTF"). `\fN` is tracked even inside `\htmlrtf`-suppressed text.
+- **`make lint` checks gofmt itself**: golangci-lint here does not.
 - **Fuzz with `-fuzzminimizetime 1x`** (the Makefile does): minimizing tens-of-KB inputs stalls the run for seconds.
-- **Writing escapes through a tool can turn them into raw characters** (`\uFFFD`, bidi controls).
-  `source_test.go` refuses them; re-escape.
+- **Writing escapes through a tool can turn them into raw characters** (`\uFFFD`, bidi controls, a soft hyphen,
+  and even `\u1235` inside a raw string such as an RTF `\u12354`). `source_test.go` refuses control and format
+  characters, NBSP and U+FFFD; check other non-ASCII by eye.
 
 ## Decisions (from the RFP — do not silently reverse)
 
 - Reads the container only; header semantics, URLs, type detection and hashing belong to consumers.
 - Attachments come back as bytes (a copy).
 - CFB is read from MS-CFB in-house and exported as `cfb`; no community dependencies.
-- A .msg returns every body it holds (text, HTML, later RTF); a client's choice among them is not guessed.
+- A .msg returns every body it holds (text, HTML, compressed RTF); a client's choice among them is not guessed.
