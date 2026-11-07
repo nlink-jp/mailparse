@@ -58,15 +58,15 @@ const (
 )
 
 type flat struct {
-	node            *Node
-	path            string
-	id              int
-	child, right    uint32
-	mini            bool
-	start           uint32
-	size            int
-	sectors         int
-	typ             byte
+	node         *Node
+	path         string
+	id           int
+	child, right uint32
+	mini         bool
+	start        uint32
+	size         int
+	sectors      int
+	typ          byte
 }
 
 // Build lays out the children of the root storage as a compound file of the
