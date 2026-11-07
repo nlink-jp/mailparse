@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -67,9 +68,9 @@ func TestSourcesHoldNoRawControlOrBidiCharacters(t *testing.T) {
 func forbidden(r rune) bool {
 	switch {
 	case r < 0x20, r == 0x7f, r >= 0x80 && r <= 0x9f: // C0, DEL, C1
-	case r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069: // bidi embeddings, overrides, isolates
-	case r == 0x200e, r == 0x200f, r == 0x061c: // LRM, RLM, ALM
-	case r == 0xfffd, r == 0xfeff: // a replacement character is a decoding accident; a BOM is invisible
+	case unicode.Is(unicode.Cf, r): // format characters: bidi controls, LRM/RLM/ALM, zero-width, soft hyphen, BOM
+	case r == 0xa0: // a no-break space reads as a space
+	case r == 0xfffd: // a replacement character is a decoding accident
 	default:
 		return false
 	}
