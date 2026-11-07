@@ -5,13 +5,23 @@
 // It is written from the published specification for hostile input. Sector
 // chains that loop, directory trees that loop or share entries, sector numbers
 // past the end of the file and stream sizes larger than the file are detected
-// and cut, never followed without bound; the work done is proportional to the
-// input size. Problems that leave the rest of the file readable are reported as
-// Issues on the File instead of failing the whole open, and a stream whose chain
-// ends early is returned as far as it goes, with ErrTruncated.
+// and cut, never followed without bound. Problems that leave the rest of the
+// file readable are reported as Issues on the File instead of failing the whole
+// open, and a stream whose chain ends early is returned as far as it goes, with
+// ErrTruncated.
 //
-// The whole file is held in memory (Limits.MaxSize bounds it). The package only
-// reads; it never writes a compound file.
+// Opening walks every chain once, so its work is proportional to the input
+// size. Each ReadStream is proportional to the stream it returns, but streams
+// whose chains share sectors (MS-CFB forbids it; Open reports it as an Issue)
+// make reading every entry cost more than the file size: a consumer that reads
+// everything from untrusted files should budget its reads, as mailparse does.
+//
+// Directory entries that are allocated but not linked into the tree — a way to
+// hide a stream from tools that walk the tree — are listed in File.Unlinked.
+//
+// The whole file is held in memory (Limits.MaxSize bounds it). A File is not
+// safe for concurrent use. The package only reads; it never writes a compound
+// file.
 package cfb
 
 import (
@@ -34,8 +44,8 @@ var (
 	ErrNotStream = errors.New("cfb: entry is not a stream")
 )
 
-// Signature is the eight-byte header signature of every compound file.
-var Signature = []byte{0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1}
+// signature is the eight-byte header signature of every compound file.
+var signature = []byte{0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1}
 
 // Limits bounds what one Open reads. The zero value selects the defaults.
 type Limits struct {
@@ -87,7 +97,9 @@ const (
 	IssueFAT       = "fat"       // a FAT or DIFAT sector was out of range, looped or missing; chains through it end there
 	IssueDirectory = "directory" // the directory chain or tree looped, pointed out of range or at an unused entry; that branch was cut
 	IssueEntries   = "entries"   // more directory entries than Limits.MaxEntries; the rest were not read
-	IssueName      = "name"      // a directory entry name had an invalid length; it was read up to its terminator
+	IssueName      = "name"      // a directory entry name had an invalid length, or two siblings share a name
+	IssueUnlinked  = "unlinked"  // allocated directory entries are not linked into the tree; they are listed in File.Unlinked
+	IssueChain     = "chain"     // a stream's chain loops, ends early, or shares sectors with another stream or the mini stream
 )
 
 // Issue is one structural problem an open worked around.
@@ -125,16 +137,18 @@ type File struct {
 	Root    *Entry   // the root storage
 	Issues  []Issue  // structural problems worked around, in the order met
 	Entries []*Entry // every entry reached from the root, by ID order of discovery
+	// Unlinked holds allocated storage and stream entries that no tree links
+	// to, in ID order; their Children are not filled. ReadStream reads them.
+	Unlinked []*Entry
 
-	b        []byte
-	shift    uint
-	ssz      int
-	nsect    uint32 // sectors after the header that the file holds, counting a short last one
-	fat      []uint32
-	miniFAT  []uint32
-	mini     []byte
-	miniRead bool
-	seen     []uint64 // reusable cycle bitset over sector numbers
+	b       []byte
+	shift   uint
+	ssz     int
+	nsect   uint32 // sectors after the header that the file holds, counting a short last one
+	fat     []uint32
+	miniFAT []uint32
+	mini    []byte
+	seen    []uint64 // reusable cycle bitset over sector numbers
 }
 
 // Special sector and stream numbers (MS-CFB 2.1, 2.6.1).
@@ -168,7 +182,7 @@ func OpenBytes(b []byte, lim Limits) (*File, error) {
 	if int64(len(b)) > lim.MaxSize {
 		return nil, ErrTooLarge
 	}
-	if len(b) < 512 || !bytes.Equal(b[:8], Signature) {
+	if len(b) < 512 || !bytes.Equal(b[:8], signature) {
 		return nil, ErrNotCFB
 	}
 	f := &File{b: b}
@@ -223,6 +237,8 @@ func OpenBytes(b []byte, lim Limits) (*File, error) {
 	if err := f.readTree(dir[:n*entrySize], n); err != nil {
 		return nil, err
 	}
+	f.readMiniStream()
+	f.claimChains()
 	return f, nil
 }
 
@@ -318,7 +334,9 @@ func (f *File) chainBytes(start uint32, want int64) ([]byte, error) {
 	if want >= 0 && want < limit {
 		limit = want
 	}
-	out := make([]byte, 0, min(limit, int64(len(f.b))))
+	// Grow as the chain is read: reserving the declared size would keep a
+	// buffer as large as the file behind a stream that declares a huge size.
+	out := make([]byte, 0, min(limit, int64(16*f.ssz)))
 	f.resetSeen()
 	s := start
 	for int64(len(out)) < limit {
@@ -370,6 +388,7 @@ func (f *File) readTree(dir []byte, n int) error {
 		parent := queue[0]
 		queue = queue[1:]
 		var stack []uint32
+		names := map[string]bool{}
 		cur := le32(raw(parent.ID), 76)
 		for cur != noStream || len(stack) > 0 {
 			for cur != noStream {
@@ -387,6 +406,11 @@ func (f *File) readTree(dir []byte, n int) error {
 			id := int(stack[len(stack)-1])
 			stack = stack[:len(stack)-1]
 			e := f.entry(id, raw(id))
+			if k := strings.ToUpper(e.Name); names[k] {
+				f.issue(IssueName, "%q holds two children named %q; Child returns the first", parent.Name, e.Name)
+			} else {
+				names[k] = true
+			}
 			parent.Children = append(parent.Children, e)
 			f.Entries = append(f.Entries, e)
 			if e.Type == TypeStorage {
@@ -395,7 +419,96 @@ func (f *File) readTree(dir []byte, n int) error {
 			cur = le32(raw(id), 72)
 		}
 	}
+	for id := 1; id < n; id++ {
+		if t := Type(raw(id)[66]); !used[id] && (t == TypeStorage || t == TypeStream) {
+			f.Unlinked = append(f.Unlinked, f.entry(id, raw(id)))
+		}
+	}
+	if len(f.Unlinked) > 0 {
+		f.issue(IssueUnlinked, "%d allocated entries are not linked into the tree", len(f.Unlinked))
+	}
 	return nil
+}
+
+// readMiniStream loads the mini stream and the mini FAT, reporting damage to
+// their chains.
+func (f *File) readMiniStream() {
+	var err error
+	if f.Root.Size > 0 {
+		f.mini, err = f.chainBytes(f.Root.start, f.Root.Size)
+		if err != nil {
+			f.issue(IssueChain, "mini stream: %v", err)
+		}
+	}
+	if n := int64(le32(f.b, 64)); n > 0 {
+		var mf []byte
+		mf, err = f.chainBytes(le32(f.b, 60), n*int64(f.ssz))
+		if err != nil {
+			f.issue(IssueChain, "mini FAT: %v", err)
+		}
+		f.miniFAT = make([]uint32, len(mf)/4)
+		for i := range f.miniFAT {
+			f.miniFAT[i] = le32(mf, 4*i)
+		}
+	}
+}
+
+// claimChains walks every stream's chain once, recording which stream owns
+// each sector, and reports chains that loop, end early or run into sectors
+// another stream (or the mini stream) owns. Each sector is claimed at most
+// once, so the walk is bounded by the file size however many entries there are.
+func (f *File) claimChains() {
+	const miniOwner = -1
+	owner := make([]int32, f.nsect)
+	nmini := (len(f.mini) + miniSize - 1) / miniSize
+	miniOwners := make([]int32, nmini)
+	if len(f.mini) > 0 {
+		need := (int64(len(f.mini)) + int64(f.ssz) - 1) / int64(f.ssz)
+		if why := chainWalk(f.Root.start, need, owner, miniOwner, f.fat); why != "" {
+			f.issue(IssueChain, "mini stream: %s", why)
+		}
+	}
+	streams := append(append([]*Entry(nil), f.Entries...), f.Unlinked...)
+	for _, e := range streams {
+		if e.Type != TypeStream || e.Size == 0 {
+			continue
+		}
+		if e.Size < miniCutoff {
+			need := (e.Size + miniSize - 1) / miniSize
+			if why := chainWalk(e.start, need, miniOwners, int32(e.ID+1), f.miniFAT); why != "" {
+				f.issue(IssueChain, "stream %q (mini): %s", e.Name, why)
+			}
+			continue
+		}
+		need := min((e.Size+int64(f.ssz)-1)/int64(f.ssz), int64(f.nsect))
+		if why := chainWalk(e.start, need, owner, int32(e.ID+1), f.fat); why != "" {
+			f.issue(IssueChain, "stream %q: %s", e.Name, why)
+		}
+	}
+}
+
+// chainWalk follows need links of a chain through next, claiming each sector
+// in owner for id, and says why it stopped early ("" when it did not).
+func chainWalk(start uint32, need int64, owner []int32, id int32, next []uint32) string {
+	s := start
+	for k := int64(0); k < need; k++ {
+		switch {
+		case s == endOfChain:
+			return fmt.Sprintf("chain ends after %d of %d sectors", k, need)
+		case int64(s) >= int64(len(owner)) || int64(s) >= int64(len(next)):
+			return fmt.Sprintf("sector %#x out of range", s)
+		case owner[s] == id:
+			return fmt.Sprintf("chain loops at sector %d", s)
+		case owner[s] != 0:
+			if owner[s] < 0 {
+				return fmt.Sprintf("sector %d belongs to the mini stream", s)
+			}
+			return fmt.Sprintf("sector %d is shared with entry %d", s, owner[s]-1)
+		}
+		owner[s] = id
+		s = next[s]
+	}
+	return ""
 }
 
 // reachable checks a stream ID taken from a sibling or child field.
@@ -467,15 +580,6 @@ func (f *File) ReadStream(e *Entry) ([]byte, error) {
 func (f *File) readMini(e *Entry) ([]byte, error) {
 	if e.Size == 0 {
 		return []byte{}, nil
-	}
-	if !f.miniRead {
-		f.miniRead = true
-		f.mini, _ = f.chainBytes(f.Root.start, f.Root.Size)
-		mf, _ := f.chainBytes(le32(f.b, 60), int64(le32(f.b, 64))*int64(f.ssz))
-		f.miniFAT = make([]uint32, len(mf)/4)
-		for i := range f.miniFAT {
-			f.miniFAT[i] = le32(mf, 4*i)
-		}
 	}
 	nmini := uint32(len(f.mini) / miniSize)
 	if len(f.mini)%miniSize != 0 {

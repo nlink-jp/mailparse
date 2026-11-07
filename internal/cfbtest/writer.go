@@ -33,7 +33,10 @@ type Layout struct {
 	FATSectors []uint32       // sector numbers of the FAT sectors, in DIFAT order
 	DirStart   uint32         // first directory sector
 	IDs        map[string]int // "/storage/stream" -> directory entry ID ("" is the root)
-	Starts     map[string]uint32
+	// Starts holds each entry's starting sector: a mini sector number for a
+	// stream under 4,096 bytes, a regular sector number otherwise, and for the
+	// root ("") the first sector of the mini stream.
+	Starts map[string]uint32
 }
 
 // Offset returns the file offset of sector n.
@@ -253,6 +256,9 @@ func Build(version int, children ...*Node) ([]byte, *Layout) {
 		r := dir[e.id*128 : (e.id+1)*128]
 		name := e.node.Name
 		u := utf16.Encode([]rune(name))
+		if len(u) > 31 {
+			panic("cfbtest: a directory entry name holds at most 31 UTF-16 code units: " + name)
+		}
 		for i, c := range u {
 			le16(r[2*i:], c)
 		}

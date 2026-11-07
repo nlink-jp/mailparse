@@ -345,3 +345,125 @@ func FuzzOpen(f *testing.F) {
 		}
 	})
 }
+
+func TestReviewFindings(t *testing.T) {
+	data := pattern(10000, 2)
+	t.Run("huge declared size keeps no file-sized buffer", func(t *testing.T) {
+		b, lay := cfbtest.Build(3, cfbtest.Stream("big", data), cfbtest.Stream("pad", pattern(200000, 1)))
+		e := lay.EntryOffset(lay.IDs["/big"])
+		put32(b, lay.FATOffset(lay.Starts["/big"]), 0xFFFFFFFE) // one sector long
+		binary.LittleEndian.PutUint32(b[e+120:], 0x7FFFFFFF)
+		f, _ := cfb.OpenBytes(b, cfb.Limits{})
+		got, err := f.ReadStream(f.Root.Child("big"))
+		if !errors.Is(err, cfb.ErrTruncated) || len(got) != 512 || cap(got) > 16*512 {
+			t.Fatalf("%v len %d cap %d", err, len(got), cap(got))
+		}
+	})
+	t.Run("shared chain", func(t *testing.T) {
+		b, lay := cfbtest.Build(3, cfbtest.Stream("a", data), cfbtest.Stream("b", pattern(10000, 3)))
+		put32(b, lay.EntryOffset(lay.IDs["/b"])+116, lay.Starts["/a"])
+		f, err := cfb.OpenBytes(b, cfb.Limits{})
+		if err != nil || !hasIssue(f, cfb.IssueChain) {
+			t.Fatalf("%v %v", err, f.Issues)
+		}
+	})
+	t.Run("stream over the mini stream", func(t *testing.T) {
+		b, lay := cfbtest.Build(3, cfbtest.Stream("small", pattern(100, 1)), cfbtest.Stream("big", data))
+		put32(b, lay.EntryOffset(lay.IDs["/big"])+116, lay.Starts[""])
+		f, _ := cfb.OpenBytes(b, cfb.Limits{})
+		if !hasIssue(f, cfb.IssueChain) {
+			t.Fatalf("%v", f.Issues)
+		}
+	})
+	t.Run("unlinked entry", func(t *testing.T) {
+		b, lay := cfbtest.Build(3, cfbtest.Stream("a", []byte("A")), cfbtest.Stream("b", []byte("hidden")), cfbtest.Stream("c", []byte("C")))
+		put32(b, lay.EntryOffset(lay.IDs["/a"])+72, uint32(lay.IDs["/c"])) // skip b
+		f, err := cfb.OpenBytes(b, cfb.Limits{})
+		if err != nil || !hasIssue(f, cfb.IssueUnlinked) || len(f.Unlinked) != 1 || f.Root.Child("b") != nil {
+			t.Fatalf("%v %v %v", err, f.Issues, f.Unlinked)
+		}
+		if got := readAll(t, f, f.Unlinked[0]); string(got) != "hidden" {
+			t.Fatalf("unlinked %q", got)
+		}
+	})
+	t.Run("duplicate sibling names", func(t *testing.T) {
+		b, _ := cfbtest.Build(3, cfbtest.Stream("a", []byte("1")), cfbtest.Stream("A", []byte("2")))
+		f, _ := cfb.OpenBytes(b, cfb.Limits{})
+		if !hasIssue(f, cfb.IssueName) {
+			t.Fatalf("%v", f.Issues)
+		}
+	})
+	t.Run("left children in order", func(t *testing.T) {
+		b, lay := cfbtest.Build(3, cfbtest.Stream("a", []byte("A")), cfbtest.Stream("b", []byte("B")), cfbtest.Stream("c", []byte("C")))
+		ia, ib, ic := lay.IDs["/a"], lay.IDs["/b"], lay.IDs["/c"]
+		put32(b, lay.EntryOffset(0)+76, uint32(ib))  // root -> b
+		put32(b, lay.EntryOffset(ib)+68, uint32(ia)) // b.left = a
+		put32(b, lay.EntryOffset(ib)+72, uint32(ic)) // b.right = c
+		put32(b, lay.EntryOffset(ia)+72, 0xFFFFFFFF) // a.right = none
+		f, err := cfb.OpenBytes(b, cfb.Limits{})
+		if err != nil || len(f.Issues) != 0 || len(f.Root.Children) != 3 || f.Root.Children[0].Name != "a" || f.Root.Children[2].Name != "c" {
+			t.Fatalf("%v %v %v", err, f.Issues, f.Root.Children)
+		}
+	})
+	t.Run("header oddities tolerated", func(t *testing.T) {
+		b, _ := cfbtest.Build(3, sample()...)
+		binary.LittleEndian.PutUint16(b[26:], 4) // v4 with 512-byte sectors
+		put32(b, 56, 8192)                       // mini cutoff
+		f, err := cfb.OpenBytes(b, cfb.Limits{})
+		if err != nil || !hasIssue(f, cfb.IssueHeader) || f.Version != 3 {
+			t.Fatalf("%v %v %d", err, f.Issues, f.Version)
+		}
+	})
+	t.Run("root of type storage", func(t *testing.T) {
+		b, lay := cfbtest.Build(3, sample()...)
+		b[lay.EntryOffset(0)+66] = 1
+		f, err := cfb.OpenBytes(b, cfb.Limits{})
+		if err != nil || !hasIssue(f, cfb.IssueDirectory) {
+			t.Fatalf("%v %v", err, f.Issues)
+		}
+	})
+	t.Run("mini stream damage", func(t *testing.T) {
+		small := pattern(3000, 9)
+		b, lay := cfbtest.Build(3, cfbtest.Stream("small", small))
+		put32(b, lay.FATOffset(lay.Starts[""]+2), 0xFFFFFFFE) // the mini stream chain ends after 3 sectors
+		f, _ := cfb.OpenBytes(b, cfb.Limits{})
+		got, err := f.ReadStream(f.Root.Child("small"))
+		if !hasIssue(f, cfb.IssueChain) || !errors.Is(err, cfb.ErrTruncated) || !bytes.Equal(got, small[:len(got)]) {
+			t.Fatalf("%v %v %d", f.Issues, err, len(got))
+		}
+	})
+	t.Run("mini sector out of range", func(t *testing.T) {
+		b, lay := cfbtest.Build(3, cfbtest.Stream("small", pattern(100, 1)))
+		put32(b, lay.EntryOffset(lay.IDs["/small"])+116, 500)
+		f, _ := cfb.OpenBytes(b, cfb.Limits{})
+		if _, err := f.ReadStream(f.Root.Child("small")); !errors.Is(err, cfb.ErrTruncated) || !hasIssue(f, cfb.IssueChain) {
+			t.Fatalf("%v %v", err, f.Issues)
+		}
+	})
+	t.Run("directory chain damage", func(t *testing.T) {
+		var many []*cfbtest.Node
+		for i := range 10 {
+			many = append(many, cfbtest.Stream(string(rune('a'+i)), []byte{byte(i)}))
+		}
+		b, lay := cfbtest.Build(3, many...)
+		put32(b, lay.FATOffset(lay.DirStart+1), lay.DirStart) // the directory chain loops
+		f, err := cfb.OpenBytes(b, cfb.Limits{})
+		if err != nil || !hasIssue(f, cfb.IssueDirectory) {
+			t.Fatalf("%v %v", err, f.Issues)
+		}
+	})
+	t.Run("OpenBytes too large", func(t *testing.T) {
+		b, _ := cfbtest.Build(3, sample()...)
+		if _, err := cfb.OpenBytes(b, cfb.Limits{MaxSize: 100}); !errors.Is(err, cfb.ErrTooLarge) {
+			t.Fatal(err)
+		}
+	})
+	t.Run("DIFAT longer than declared", func(t *testing.T) {
+		b, _ := cfbtest.Build(3, cfbtest.Stream("huge", pattern(7_300_000, 5)))
+		put32(b, 72, 0) // no DIFAT sectors declared, but the header points at one
+		f, err := cfb.OpenBytes(b, cfb.Limits{})
+		if err != nil || !hasIssue(f, cfb.IssueFAT) {
+			t.Fatalf("%v %v", err, f.Issues)
+		}
+	})
+}
