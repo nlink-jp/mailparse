@@ -17,10 +17,14 @@ vet:
 lint:
 	golangci-lint run ./...
 
-## fuzz: explore beyond the seeds for a while (FUZZTIME, default 60s)
+## fuzz: explore beyond the seeds for a while (FUZZTIME per target, default 60s).
+## Minimizing is capped at one try: with seeds of tens of KB, minimizing each new
+## input stalls the run for seconds and counts no executions.
 FUZZTIME ?= 60s
+FUZZFLAGS = -run '^$$' -fuzztime $(FUZZTIME) -fuzzminimizetime 1x
 fuzz:
-	go test -run '^$$' -fuzz '^FuzzParseBytes$$' -fuzztime $(FUZZTIME) .
+	go test $(FUZZFLAGS) -fuzz '^FuzzParseBytes$$' .
+	go test $(FUZZFLAGS) -fuzz '^FuzzOpen$$' ./cfb
 
 check: lint test
 
