@@ -36,6 +36,7 @@ transfer.go   Base64 / quoted-printable that keep what decodes and warn about da
 charset.go    Declared charset, HTML <meta charset> (x/net/html tokenizer), Japanese guessing, strict decoding
 warnings.go   Warning codes
 codepage.go   Windows code page -> charset (incl. 50220-50222, 51932)
+params.go     Lenient Content-Type / Content-Disposition parameters (RFC 2231 in any charset); replaces mime.ParseMediaType
 msg.go        .msg (MS-OXMSG): property streams, transport headers or MAPI identity, bodies, attachments, embedded
 rtf.go        Compressed RTF (MS-OXRTFCP) and de-encapsulation / text extraction (MS-OXRTFEX), explicit group stack
 tnef.go       TNEF (MS-OXTNEF): attributes with checksums, encapsulated MAPI property lists, recipient table, attachments
@@ -67,6 +68,15 @@ docs/{en,ja}/ RFP and the Phase 0 record
   and attachments are filled from it by the same functions (`identityFromProps`, `propBodies`, `mapiAttachment`).
 - **TNEF has no real sample yet**: only spec-built fixtures. Measure on a real winmail.dat when one is available.
 - **`make lint` checks gofmt itself**: golangci-lint here does not.
+- **Warnings go through `warner(m)`** (capped at 100 per code); never append to `m.Warnings` directly.
+- **Never use `mime.ParseMediaType` for parameters**: one bad parameter makes it drop all of them (an attacker
+  hides the filename that way) and it decodes RFC 2231 only for UTF-8/US-ASCII. Use `parseParams`.
+- **TNEF values are read through `tnefLoader`**, which charges MaxDecoded and copies; do not read the maps directly.
+- **Code pages**: .msg 8-bit strings use PidTagMessageCodepage, bodies PidTagInternetCodepage (MS-OXCMSG); TNEF
+  strings use attOemCodepage (MS-OXTNEF 2.3.3.2).
+- **Detect needs a mail-only field, or From with an address plus an RFC 5322 Date.**
+- **The independent pre-release review found ~45 issues** (all fixed, see CHANGELOG Security): rerun one before
+  each release; the classes were memory bounds, hidden content and misleading values.
 - **Fuzz with `-fuzzminimizetime 1x`** (the Makefile does): minimizing tens-of-KB inputs stalls the run for seconds.
 - **Writing escapes through a tool can turn them into raw characters** (`\uFFFD`, bidi controls, a soft hyphen,
   and even `\u1235` inside a raw string such as an RTF `\u12354`). `source_test.go` refuses control and format

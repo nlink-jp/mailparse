@@ -42,3 +42,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Undeclared ISO-2022-JP text, being 7-bit, was taken for US-ASCII; its escape
   sequences are now recognized and the guess is reported.
+
+### Security
+
+Found by an independent pre-release review and fixed before the first
+release:
+
+- Memory: a cfb stream declaring a huge size kept a file-sized buffer;
+  compressed RTF reserved its RAWSIZE and stacked groups without bound;
+  multipart splitting collected every delimiter line; TNEF floods of
+  attributes or warnings grew without bound. Every message now caps warnings
+  at 100 per code (`warning_limit`), and TNEF values are charged to
+  `MaxDecoded`.
+- Hidden content: one malformed MIME parameter discarded the attachment name;
+  an unsplittable multipart and parts after the closing delimiter were
+  dropped; HTMLTAG content leaked from plain RTF and skipped destinations;
+  HYPERLINK targets in plain RTF were lost; cfb entries not linked into the
+  tree went unreported (now `File.Unlinked`).
+- Misleading values: TNEF attMessageID was reported as the Message-ID; .msg
+  and TNEF 8-bit strings used the wrong code page; a mailbox showing one
+  address and carrying another, and MAPI identity differing from the headers,
+  now warn; YAML and HTTP header dumps were detected as mail.
+
+### Changed
+
+- `Message.ReturnPath` is `[]AddressList` (parsed, null path included).
+- `cfb.Signature` is no longer exported.
+

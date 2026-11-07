@@ -42,7 +42,7 @@ type Options struct {
 	MaxMessageDepth int   // layers of nested messages opened below the top one
 	MaxMIMEDepth    int   // depth of the MIME tree within one message
 	MaxParts        int   // parts across every layer
-	MaxDecoded      int64 // decoded bytes across every layer
+	MaxDecoded      int64 // decoded bytes kept across every layer (an attached message's bytes and its parts each count)
 	MaxHeaders      int   // header fields per header block
 	MaxHeaderBytes  int   // header bytes per header block
 }
@@ -124,14 +124,14 @@ type Body struct {
 	Content   string `json:"content"`
 	Charset   string `json:"charset"`
 	// CharsetSource says how Charset was decided: "mime" (the Content-Type
-	// parameter), "meta" (HTML <meta>), "codepage" (a .msg code page),
-	// "unicode" (a .msg Unicode property), "default" (US-ASCII by RFC 2045), or
-	// "guessed".
+	// parameter), "meta" (HTML <meta>), "codepage" (a .msg or TNEF code page),
+	// "unicode" (a Unicode MAPI property), "rtf" (the RTF \ansicpg), "default"
+	// (US-ASCII by RFC 2045), or "guessed".
 	CharsetSource string `json:"charset_source"`
 	Size          int    `json:"size"` // decoded bytes before charset conversion
 	// Part names where the body came from: a MIME part path ("1.2"), or for a
 	// .msg or TNEF the property ("msg/body", "msg/html", "msg/rtf",
-	// "tnef/body"; "msg/attach/2/body" inside an embedded message).
+	// "tnef/body"). A nested message names its parts from its own root.
 	Part string `json:"part"`
 }
 

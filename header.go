@@ -18,6 +18,9 @@ type Field struct {
 	// Raw is the value exactly as written after the colon, folding included.
 	Raw string `json:"raw"`
 	// Value is Raw unfolded, trimmed, and with RFC 2047 encoded-words decoded.
+	// For address fields it is display text only: decoding before parsing is
+	// how a spoofed address gets in, so read addresses from Message.From, To
+	// and the other parsed lists, never from Value.
 	Value string `json:"value"`
 }
 

@@ -52,7 +52,9 @@ const (
 type Warning struct {
 	Code   string `json:"code"`
 	Detail string `json:"detail"`
-	// Part is the MIME part path the warning concerns ("" for the message
-	// header, "1", "2.1" for parts).
+	// Part is where the warning applies: a MIME part path ("" for the message
+	// header, "1", "2.1" for parts), or for a .msg or TNEF a path such as
+	// "msg", "msg/attach/0", "tnef/recip/1". Warnings of one code beyond 100 in
+	// a message are summed up by one warning_limit warning.
 	Part string `json:"part,omitempty"`
 }
