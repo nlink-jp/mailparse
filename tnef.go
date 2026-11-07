@@ -278,6 +278,10 @@ func (st *state) tnefRecipients(data []byte, part string, warn func(Warning)) []
 	var out []*props
 	r := uint32(0)
 	for ; r < rows && rd.left() >= 4; r++ {
+		if r == maxTNEFRecipients {
+			warn(Warning{Code: WarnTNEFDamaged, Detail: fmt.Sprintf("recipient rows after the first %d were not read", maxTNEFRecipients), Part: part})
+			return out
+		}
 		fixed, v, ok := rd.propList()
 		rp := part + "/recip/" + strconv.FormatUint(uint64(r), 10)
 		q := &props{fixed: fixed, part: rp, warn: warn}
@@ -296,6 +300,10 @@ func (st *state) tnefRecipients(data []byte, part string, warn func(Warning)) []
 	}
 	return out
 }
+
+// maxTNEFRecipients bounds the recipient rows read: each costs far more memory
+// than its 4 bytes of input.
+const maxTNEFRecipients = 10000
 
 // tnefProps reads one encapsulated property list (attMsgProps, attAttachment).
 func (st *state) tnefProps(data []byte, part string, warn func(Warning)) (map[uint32][8]byte, map[uint32][]byte) {

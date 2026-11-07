@@ -63,6 +63,11 @@ release:
   and TNEF 8-bit strings used the wrong code page; a mailbox showing one
   address and carrying another, and MAPI identity differing from the headers,
   now warn; YAML and HTTP header dumps were detected as mail.
+- A second review of those fixes found and fixed: cfb issues bypassing the
+  warning cap, uncapped TNEF recipient rows, HYPERLINK targets decoded
+  differently from Word (`\uN`, `\'hh`), a Shift_JIS trail byte injecting a
+  mailbox when 8-bit names were converted before parsing, and Detect rejecting
+  minimal script mail.
 
 ### Changed
 

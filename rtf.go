@@ -242,10 +242,14 @@ type rtfGroup struct {
 	capture  bool // inside \fldinst: text is the field instruction, collected for HYPERLINK
 }
 
-// rtfField is an open \field group.
+// rtfField is an open \field group. Its \fldinst text is decoded as body
+// text is — \'hh by code page, \uN as Unicode — so the target reported is the
+// one Word would open.
 type rtfField struct {
-	depth int    // stack depth of the \field group
-	inst  []byte // the \fldinst text
+	depth  int // stack depth of the \field group
+	inst   strings.Builder
+	pend   []byte
+	pendCP uint32
 }
 
 // rtfReader turns RTF into text, keeping track of code pages.
@@ -363,7 +367,7 @@ func extractRTFFull(b []byte) rtfExtract {
 			}
 			cur().first = false
 			if cur().capture {
-				r.capture(c)
+				r.capture(c, cp())
 			} else if visibleText() {
 				r.byte(c, cp())
 			}
@@ -380,7 +384,9 @@ func extractRTFFull(b []byte) rtfExtract {
 			g := cur()
 			switch n {
 			case '*':
-				g.starred = true
+				if r.deep == 0 {
+					g.starred = true
+				}
 				continue
 			case '\'':
 				if i+1 < len(b) {
@@ -391,7 +397,7 @@ func extractRTFFull(b []byte) rtfExtract {
 						}
 						g.first = false
 						if g.capture {
-							r.capture(byte(v))
+							r.capture(byte(v), cp())
 						} else if visibleText() {
 							r.byte(byte(v), cp())
 						}
@@ -405,7 +411,7 @@ func extractRTFFull(b []byte) rtfExtract {
 					continue
 				}
 				if g.capture {
-					r.capture(n)
+					r.capture(n, cp())
 				} else if visibleText() {
 					r.byte(n, cp())
 				}
@@ -461,6 +467,24 @@ func extractRTFFull(b []byte) rtfExtract {
 		g := cur()
 		first, starred := g.first, g.starred
 		g.first = false
+		if r.deep > 0 {
+			// Past the depth cap, state changes cannot be undone when their
+			// group closes, so they are ignored; text is still read.
+			switch {
+			case word == "bin" && hasParam && param > 0:
+				i += min(param, len(b)-i)
+			case word == "u" && hasParam:
+				if visibleText() {
+					r.unicode(param)
+				}
+				r.skipFall = g.uc
+			default:
+				if s, ok := rtfSymbols[word]; ok && visibleText() {
+					r.text(s)
+				}
+			}
+			continue
+		}
 
 		switch word {
 		case "bin":
@@ -507,7 +531,9 @@ func extractRTFFull(b []byte) rtfExtract {
 			continue
 		case "u":
 			if hasParam {
-				if visibleText() {
+				if g.capture {
+					r.captureUnicode(param)
+				} else if visibleText() {
 					r.unicode(param)
 				}
 				r.skipFall = g.uc
@@ -554,6 +580,9 @@ func extractRTFFull(b []byte) rtfExtract {
 			r.text(s)
 		}
 	}
+	for len(r.fields) > 0 { // a field left open still names its target
+		r.closeField(visibleText())
+	}
 	r.flushSurrogate()
 	r.flush()
 	charset := codePageCharset(r.defaultCP)
@@ -563,21 +592,79 @@ func extractRTFFull(b []byte) rtfExtract {
 	return rtfExtract{kind: r.kind, text: r.out.String(), charset: charset, badCP: r.badCP, tooDeep: r.tooDeep, badUnicode: r.badUnicode}
 }
 
+const maxFieldInst = 4096
+
 // capture adds a byte of \fldinst text to the innermost open field.
-func (r *rtfReader) capture(c byte) {
+func (r *rtfReader) capture(c byte, cp uint32) {
 	f := &r.fields[len(r.fields)-1]
-	if len(f.inst) < 4096 {
-		f.inst = append(f.inst, c)
+	if f.inst.Len()+len(f.pend) >= maxFieldInst {
+		return
 	}
+	if len(f.pend) > 0 && cp != f.pendCP {
+		r.flushField(f)
+	}
+	f.pendCP = cp
+	f.pend = append(f.pend, c)
+}
+
+// captureUnicode adds a \uN character to the innermost open field.
+func (r *rtfReader) captureUnicode(n int) {
+	f := &r.fields[len(r.fields)-1]
+	r.flushField(f)
+	if f.inst.Len() >= maxFieldInst {
+		return
+	}
+	if n < 0 {
+		n += 65536
+	}
+	v := rune(n)
+	if n > 65535 || utf16.IsSurrogate(v) {
+		v = utf8.RuneError // pairs are not needed in a link target; reported as a bad escape
+		r.badUnicode = true
+	}
+	f.inst.WriteRune(v)
+}
+
+func (r *rtfReader) flushField(f *rtfField) {
+	if len(f.pend) == 0 {
+		return
+	}
+	s, bad := decodeRun(f.pend, f.pendCP)
+	if bad && r.badCP == 0 {
+		r.badCP = f.pendCP
+	}
+	f.inst.WriteString(s)
+	f.pend = f.pend[:0]
 }
 
 // closeField ends the innermost field and, for a HYPERLINK, writes its target.
 func (r *rtfReader) closeField(visible bool) {
-	f := r.fields[len(r.fields)-1]
+	f := &r.fields[len(r.fields)-1]
+	r.flushField(f)
+	inst := f.inst.String()
 	r.fields = r.fields[:len(r.fields)-1]
-	if target := hyperlinkTarget(string(f.inst)); target != "" && visible {
+	if target := hyperlinkTarget(inst); target != "" && visible {
 		r.text(" <" + target + ">")
 	}
+}
+
+// decodeRun decodes bytes in a code page, replacing only bytes that do not
+// decode; bad says some did not.
+func decodeRun(b []byte, cp uint32) (s string, bad bool) {
+	if isASCII(b) && asciiCompatible(cp) {
+		return string(b), false
+	}
+	if name := codePageCharset(cp); name != "" {
+		if enc, err := htmlindex.Get(name); err == nil {
+			if s, ok := decodeStrict(enc, b); ok {
+				return s, false
+			}
+			if s, err := enc.NewDecoder().Bytes(b); err == nil {
+				return strings.ToValidUTF8(string(s), "\uFFFD"), true
+			}
+		}
+	}
+	return strings.ToValidUTF8(string(b), "\uFFFD"), true
 }
 
 // hyperlinkTarget reads the target of a HYPERLINK field instruction:
@@ -702,29 +789,12 @@ func (r *rtfReader) flush() {
 	if len(r.pending) == 0 {
 		return
 	}
-	b := r.pending
+	s, bad := decodeRun(r.pending, r.pendingCP)
 	r.pending = r.pending[:0]
-	if isASCII(b) && asciiCompatible(r.pendingCP) {
-		r.out.Write(b)
-		return
+	if bad {
+		r.noteBadCP()
 	}
-	name := codePageCharset(r.pendingCP)
-	if name != "" {
-		if enc, err := htmlindex.Get(name); err == nil {
-			if s, ok := decodeStrict(enc, b); ok {
-				r.out.WriteString(s)
-				return
-			}
-			r.noteBadCP()
-			// Replace only the bytes that do not decode, not the whole run.
-			if s, err := enc.NewDecoder().Bytes(b); err == nil {
-				r.out.Write(s)
-				return
-			}
-		}
-	}
-	r.noteBadCP()
-	r.out.WriteString(strings.ToValidUTF8(string(b), "\uFFFD"))
+	r.out.WriteString(s)
 }
 
 // rtfBody decompresses a PidTagRtfCompressed value and adds the body it

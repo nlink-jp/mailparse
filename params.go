@@ -27,7 +27,7 @@ func parseParams(v string) (mediaType string, params map[string]string, problems
 	if len(segs) == 0 {
 		return "", params, problems
 	}
-	mediaType = strings.ToLower(strings.TrimSpace(segs[0]))
+	mediaType = strings.ToLower(strings.TrimSpace(stripComments(segs[0])))
 	if strings.Contains(mediaType, "=") {
 		problems = append(problems, "the value starts with a parameter, not a type")
 		mediaType = ""
@@ -52,7 +52,11 @@ func parseParams(v string) (mediaType string, params map[string]string, problems
 			continue
 		}
 		key := strings.ToLower(strings.TrimSpace(seg[:eq]))
-		val := unquoteParam(strings.TrimSpace(seg[eq+1:]))
+		rawVal := strings.TrimSpace(seg[eq+1:])
+		val := unquoteParam(rawVal)
+		if !strings.HasPrefix(rawVal, `"`) {
+			val = strings.TrimSpace(stripComments(val)) // charset=us-ascii (Plain text)
+		}
 		if seen[key] {
 			problems = append(problems, fmt.Sprintf("parameter %s appears more than once; the first was kept", safeToken(key)))
 			continue
@@ -74,6 +78,10 @@ func parseParams(v string) (mediaType string, params map[string]string, problems
 			if continued[name] == nil {
 				continued[name] = map[int]piece{}
 			}
+			if _, dup := continued[name][n]; dup { // *0, *00 and *0* are one section
+				problems = append(problems, fmt.Sprintf("parameter %s gives RFC 2231 section %d more than once; the first was kept", safeToken(name), n))
+				continue
+			}
 			continued[name][n] = piece{val, ext}
 		}
 	}
@@ -84,6 +92,20 @@ func parseParams(v string) (mediaType string, params map[string]string, problems
 		}
 		return s, ok
 	}
+	plain := map[string]string{}
+	for k, v := range params {
+		plain[k] = v
+	}
+	defer func() {
+		// Both forms given and different: a reader of the plain one sees
+		// another name than one honouring RFC 2231 (the one kept).
+		for name, v := range plain {
+			if got, ok := params[name]; ok && got != v {
+				problems = append(problems, fmt.Sprintf("parameter %s and its RFC 2231 form differ; the RFC 2231 form was used", safeToken(name)))
+			}
+		}
+		sort.Strings(problems)
+	}()
 	for name, val := range extendedSingle {
 		charset, raw, ok := split2231(val)
 		if !ok {
@@ -132,6 +154,32 @@ func parseParams(v string) (mediaType string, params map[string]string, problems
 		params[name], _ = decode(name, charset, buf)
 	}
 	return mediaType, params, problems
+}
+
+// stripComments removes RFC 5322 comments — "(...)", nested, with
+// backslash escapes — from an unquoted value.
+func stripComments(v string) string {
+	if !strings.Contains(v, "(") {
+		return v
+	}
+	var b strings.Builder
+	depth, escaped := 0, false
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		switch {
+		case escaped:
+			escaped = false
+		case depth > 0 && c == '\\':
+			escaped = true
+		case c == '(':
+			depth++
+		case c == ')' && depth > 0:
+			depth--
+		case depth == 0:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
 }
 
 // splitParams splits on ";" outside quoted strings.

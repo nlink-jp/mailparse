@@ -38,8 +38,9 @@ for _, w := range m.Warnings { /* 解析中に起きたこと */ }
 
 `Detect(b)` は中身でメールを積極的に判別します（`eml` / `msg` / `tnef` / `unknown`）。設定ファイルや鍵のファイルは
 `unknown` で、メールとして「読まれる」ことはありません。`.eml` と判別するには、メールにしか現れない欄（Received、
-Message-ID、Return-Path、DKIM-Signature など）か、アドレスを含む From と RFC 5322 の形の Date の組が要ります。
-`from:` と `date:` のキーを持つ YAML や、HTTP のヘッダの写しはメールではありません。
+Message-ID、Return-Path、DKIM-Signature など）か、メールらしい欄名（`_` を含まず、すべて小文字ではない）の中に
+アドレスを含む From が要ります。スクリプトが送る From/To/Subject だけのメールはメールで、`from:` と `to:` のキーを
+持つ YAML や、HTTP のヘッダの写しはメールではありません。
 
 ## 読むもの・使う側に任せるもの
 

@@ -74,7 +74,10 @@ docs/{en,ja}/ RFP and the Phase 0 record
 - **TNEF values are read through `tnefLoader`**, which charges MaxDecoded and copies; do not read the maps directly.
 - **Code pages**: .msg 8-bit strings use PidTagMessageCodepage, bodies PidTagInternetCodepage (MS-OXCMSG); TNEF
   strings use attOemCodepage (MS-OXTNEF 2.3.3.2).
-- **Detect needs a mail-only field, or From with an address plus an RFC 5322 Date.**
+- **Detect needs a mail-only field, or a From with an address among mail-like field names** (no `_`, not all
+  lowercase). Requiring a Date rejected minimal script mail (second review); keep both directions tested.
+- **Address fields are tokenized on the raw bytes; only display names are converted from 8-bit afterwards** — a
+  Shift_JIS trail byte 0x5C converted first swallows a quoted-string escape and injects a mailbox.
 - **The independent pre-release review found ~45 issues** (all fixed, see CHANGELOG Security): rerun one before
   each release; the classes were memory bounds, hidden content and misleading values.
 - **Fuzz with `-fuzzminimizetime 1x`** (the Makefile does): minimizing tens-of-KB inputs stalls the run for seconds.

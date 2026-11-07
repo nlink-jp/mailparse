@@ -41,8 +41,9 @@ for _, w := range m.Warnings { /* what the parse met */ }
 
 `Detect(b)` recognizes a message positively by content (`eml` / `msg` / `tnef` / `unknown`); a config or key file
 is `unknown` and is never "parsed" as mail. An `.eml` needs a field only mail carries (Received, Message-ID,
-Return-Path, DKIM-Signature...) or a From with an address and a Date in RFC 5322 form — a YAML file with `from:`
-and `date:` keys or an HTTP header dump is not mail.
+Return-Path, DKIM-Signature...), or a From with an address among field names that look like mail (none with `_`,
+not all lowercase) — a minimal From/To/Subject message from a script is mail; a YAML file with `from:` and `to:`
+keys or an HTTP header dump is not.
 
 ## What it reads, and what it leaves to you
 

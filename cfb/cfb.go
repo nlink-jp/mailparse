@@ -149,6 +149,8 @@ type File struct {
 	miniFAT []uint32
 	mini    []byte
 	seen    []uint64 // reusable cycle bitset over sector numbers
+
+	issueCount map[string]int
 }
 
 // Special sector and stream numbers (MS-CFB 2.1, 2.6.1).
@@ -242,8 +244,21 @@ func OpenBytes(b []byte, lim Limits) (*File, error) {
 	return f, nil
 }
 
+// maxIssuesPerCode bounds Issues: a hostile file can repeat one fault for
+// every entry. Past it, one more Issue of the code says the rest were dropped.
+const maxIssuesPerCode = 100
+
 func (f *File) issue(code, format string, a ...any) {
-	f.Issues = append(f.Issues, Issue{Code: code, Detail: fmt.Sprintf(format, a...)})
+	if f.issueCount == nil {
+		f.issueCount = map[string]int{}
+	}
+	f.issueCount[code]++
+	switch n := f.issueCount[code]; {
+	case n <= maxIssuesPerCode:
+		f.Issues = append(f.Issues, Issue{Code: code, Detail: fmt.Sprintf(format, a...)})
+	case n == maxIssuesPerCode+1:
+		f.Issues = append(f.Issues, Issue{Code: code, Detail: fmt.Sprintf("further %s issues after the first %d were not recorded", code, maxIssuesPerCode)})
+	}
 }
 
 // sector returns the bytes of sector n, short if the file ends inside it, or

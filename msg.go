@@ -185,8 +185,9 @@ func (st *state) parseMSG(b []byte, depth int) (*Message, error) {
 	r := &msgReader{st: st, f: f}
 	m := r.message(f.Root, 32, depth, "msg")
 	m.Size = int64(len(b))
+	warn := warner(m)
 	for _, is := range f.Issues {
-		m.Warnings = append(m.Warnings, Warning{Code: WarnCFBDamaged, Detail: "compound file: " + is.Code + ": " + is.Detail, Part: "msg"})
+		warn(Warning{Code: WarnCFBDamaged, Detail: "compound file: " + is.Code + ": " + is.Detail, Part: "msg"})
 	}
 	return m, nil
 }

@@ -14,16 +14,11 @@ import (
 // has tokenized it, which keeps an injected "<...>" inside the name.
 func parseAddressList(field Field, part string, warn func(Warning)) AddressList {
 	raw := unfold([]byte(field.Raw))
-	// Raw 8-bit bytes (not RFC 2047) are converted before parsing so display
-	// names come out as text; decodeHeaderValue has warned about them.
-	if !utf8.ValidString(raw) {
-		if s, _, ok := guessJapanese([]byte(raw)); ok {
-			raw = s
-		} else {
-			raw = strings.ToValidUTF8(raw, "\uFFFD")
-		}
-	}
-	al := AddressList{Raw: raw, Mailboxes: []Mailbox{}}
+	// Raw 8-bit bytes (not RFC 2047) are tokenized as bytes and only the
+	// display names are converted afterwards: converting first would let a
+	// Shift_JIS trail byte 0x5C swallow a quoted-string escape and change
+	// where the addresses are.
+	al := AddressList{Raw: text8(raw), Mailboxes: []Mailbox{}}
 	if raw == "" {
 		al.Parsed = true
 		return al
@@ -32,7 +27,7 @@ func parseAddressList(field Field, part string, warn func(Warning)) AddressList 
 	if list, err := p.ParseList(raw); err == nil {
 		al.Parsed = true
 		for _, a := range list {
-			name := a.Name
+			name := text8(a.Name)
 			if strings.Contains(name, "=?") {
 				name = decodeWords(name, "a display name in "+safeToken(field.Name), part, warn)
 			}
@@ -43,10 +38,23 @@ func parseAddressList(field Field, part string, warn func(Warning)) AddressList 
 	warn(Warning{Code: WarnInvalidAddress, Detail: safeToken(field.Name) + " did not parse as RFC 5322; a lenient reading was used", Part: part})
 	for _, item := range splitAddresses(raw) {
 		if mb, ok := lenientMailbox(item, field.Name, part, warn); ok {
+			mb.Name = text8(mb.Name)
 			al.Mailboxes = append(al.Mailboxes, mb)
 		}
 	}
 	return al
+}
+
+// text8 turns raw 8-bit bytes into text (a Japanese guess, else replacement);
+// decodeHeaderValue has already warned about them for the field.
+func text8(s string) string {
+	if utf8.ValidString(s) {
+		return s
+	}
+	if t, _, ok := guessJapanese([]byte(s)); ok {
+		return t
+	}
+	return strings.ToValidUTF8(s, "\uFFFD")
 }
 
 // splitAddresses splits on commas outside quotes, angle brackets and comments.

@@ -3,7 +3,6 @@ package mailparse
 import (
 	"bytes"
 	"encoding/binary"
-	"net/mail"
 	"strings"
 )
 
@@ -33,9 +32,12 @@ var (
 //   - .msg: the CFB signature and the MSG property stream names in the
 //     directory (a plain OLE Office document is CFB too, and is not a message)
 //   - TNEF: its signature
-//   - .eml: a header block that starts with a field and names at least two
-//     well-known message fields, one of them From, Received, Message-ID,
-//     Return-Path or Date
+//   - .eml: a header block that starts with a field, names at least two
+//     well-known message fields, and either holds a field only mail carries
+//     (Received, Message-ID, Return-Path, DKIM-Signature...) or a From with an
+//     address whose field names look like mail: none contains "_" and not
+//     all are lowercase. A YAML file with from:/to: keys or an HTTP header
+//     dump is not mail; a minimal From/To/Subject message from a script is.
 func Detect(b []byte) Format {
 	switch {
 	case len(b) >= len(cfbSignature) && bytes.Equal(b[:len(cfbSignature)], cfbSignature):
@@ -52,9 +54,8 @@ func Detect(b []byte) Format {
 }
 
 // strongFields appear in mail and hardly anywhere else; one of them anchors a
-// header block. Without one, a From holding an address and a Date in RFC 5322
-// form together do. A YAML file with from:/date: keys or an HTTP header dump
-// (Date, Content-Type, Server) has neither.
+// header block. Without one, a From holding an address anchors it when the
+// field names look like mail (see looksLikeEML).
 var strongFields = map[string]bool{
 	"received": true, "message-id": true, "return-path": true, "dkim-signature": true,
 	"authentication-results": true, "arc-seal": true, "received-spf": true, "delivered-to": true,
@@ -86,34 +87,40 @@ func looksLikeEML(b []byte) bool {
 	if _, _, ok := splitField(lines[i]); !ok {
 		return false
 	}
-	known, anchor, fromAddr, mailDate := 0, false, false, false
+	known, anchor, fromAddr := 0, false, false
+	underscore, allLower := false, true
+	inFrom := false
 	for ; i < len(lines); i++ {
 		l := lines[i]
 		if len(bytes.TrimSpace(l)) == 0 {
 			break
 		}
 		if l[0] == ' ' || l[0] == '\t' {
+			if inFrom && bytes.Contains(l, []byte("@")) {
+				fromAddr = true // a From folded onto its next line
+			}
 			continue
 		}
 		name, value, ok := splitField(l)
 		if !ok {
 			continue
 		}
+		inFrom = false
 		n := strings.ToLower(name)
 		if knownFields[n] {
 			known++
 		}
+		underscore = underscore || strings.Contains(name, "_")
+		allLower = allLower && name == n
 		switch {
 		case strongFields[n]:
 			anchor = true
 		case n == "from":
-			fromAddr = bytes.Contains(value, []byte("@"))
-		case n == "date":
-			_, err := mail.ParseDate(strings.TrimSpace(string(value)))
-			mailDate = err == nil
+			inFrom = true
+			fromAddr = fromAddr || bytes.Contains(value, []byte("@"))
 		}
 	}
-	return (anchor || (fromAddr && mailDate)) && known >= 2
+	return known >= 2 && (anchor || (fromAddr && !underscore && !allLower))
 }
 
 // splitLines splits on LF, dropping a trailing CR from each line.
