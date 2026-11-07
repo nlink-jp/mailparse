@@ -14,7 +14,7 @@
 - **上限**（大きさ・入れ子・パーツ数・デコード後の大きさ）は、入れ子のメールも含めた 1 回の解析で共有します。
   入力で panic しないことは、ファジングで確かめています。
 
-> 状態: 開発中（v0.x、未リリース）。`.eml`、Outlook の `.msg`（圧縮 RTF を含む）、winmail.dat（TNEF）に対応。
+> 状態: v0.1.0 — 最初の利用者 mail-dissect とともに、v1.0 までは API が変わることがあります。`.eml`、Outlook の `.msg`（圧縮 RTF を含む）、winmail.dat（TNEF）に対応。
 > `.msg` は実物の Outlook のメールで確かめています。TNEF は仕様どおりに組み立てた見本でだけ確かめています。
 
 [English README](README.md)

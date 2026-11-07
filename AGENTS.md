@@ -10,7 +10,7 @@ Module path: `github.com/nlink-jp/mailparse`. Design authority:
 [docs/ja/mailparse-rfp.ja.md](docs/ja/mailparse-rfp.ja.md) (English beside it); the comparison with the three
 existing util-series parsers and the measured defects: [docs/ja/mailparse-phase0.ja.md](docs/ja/mailparse-phase0.ja.md).
 
-**Status: in development. Phases 1 (.eml) and 2 (CFB, .msg, compressed RTF, TNEF) done; Phase 3 (independent review, release) next.**
+**Status: v0.1.0 released. The API is v0.x until mail-dissect (first consumer) settles it.**
 
 ## Build / test
 
