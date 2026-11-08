@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Documentation
+
+- mail-dissect, the planned first consumer, was withdrawn before release
+  (2026-11-08). The README, README.ja and AGENTS now name the four util-series
+  mail tools as the consumers; the RFP carries a dated note and is otherwise
+  left as the design record.
+
 ## [0.3.0] - 2026-11-07
 
 ### Security

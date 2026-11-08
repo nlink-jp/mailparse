@@ -2,6 +2,10 @@
 
 > Generated: 2026-11-07
 > Status: Draft (all 7 items agreed with the owner; independent design review applied)
+>
+> Note (2026-11-08): mail-dissect, named here as the first consumer, was withdrawn before release (its design broke
+> down; the origin of organization ADR-029). The text is left as the design record of its time. The current consumers
+> are the four util-series mail tools.
 
 ## 1. Problem Statement
 

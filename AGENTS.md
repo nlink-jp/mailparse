@@ -4,13 +4,15 @@
 
 A Go library (lib-series) that reads email messages into one Message shape: header fields in order with
 duplicates, address lists per occurrence, the MIME tree, UTF-8 bodies, attachment bytes, nested messages and
-Warnings. Written for attacker-composed input. First consumer: mail-dissect (cybersecurity-series).
+Warnings. Written for attacker-composed input. Consumers: the four util-series mail tools (mail-analyzer,
+mail-analyzer-local, eml-to-jsonl, msg-to-jsonl). Its planned first consumer, mail-dissect, was withdrawn on
+2026-11-08 before release.
 
 Module path: `github.com/nlink-jp/mailparse`. Design authority:
 [docs/ja/mailparse-rfp.ja.md](docs/ja/mailparse-rfp.ja.md) (English beside it); the comparison with the three
 existing util-series parsers and the measured defects: [docs/ja/mailparse-phase0.ja.md](docs/ja/mailparse-phase0.ja.md).
 
-**Status: v0.3.0. The API is v0.x until its consumers (mail-dissect, the four util-series mail tools) settle it.**
+**Status: v0.3.0. The API is v0.x until its consumers (the four util-series mail tools) settle it.**
 
 ## Build / test
 
