@@ -6,6 +6,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-14
+
+### Security
+
+- **`golang.org/x/net` is updated from v0.52.0 to v0.62.0 and
+  `golang.org/x/text` from v0.35.0 to v0.43.0.** Nothing mailparse itself
+  calls is affected: it uses only the tokenizer of `x/net/html` (to read a
+  `<meta charset>`), and the advisories `govulncheck` lists for that package
+  are in `Parse` and `Render`. The reason to update is the consumers. A
+  library's requirement is the lowest version a tool that imports it can
+  build with, and two of the four mail tools pass the sender's display name —
+  attacker-composed text — to `x/net/idna` and, through it, to
+  `x/text/unicode/norm`, where GO-2026-5026 (a Punycode label that decodes to
+  plain ASCII is accepted) and GO-2026-5970 (an endless loop on invalid UTF-8)
+  apply. They are fixed in x/net v0.55.0 and x/text v0.39.0.
+
+### Changed
+
+- **Building needs Go 1.26 or later** (`go.mod`; it was 1.25). Both updated
+  modules require it.
+
 ### Documentation
 
 - mail-dissect, the planned first consumer, was withdrawn before release

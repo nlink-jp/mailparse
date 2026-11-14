@@ -16,7 +16,7 @@ It is written for messages composed by an attacker:
 - **Limits** on size, nesting, part count and decoded bytes are shared across one parse, nested messages
   included. It never panics on input; fuzz tests hold it to that.
 
-> Status: v0.3.0 — the API may still change before v1.0 with its consumers, the four util-series mail tools. `.eml`, Outlook `.msg` (with compressed RTF) and winmail.dat
+> Status: v0.3.1 — the API may still change before v1.0 with its consumers, the four util-series mail tools. `.eml`, Outlook `.msg` (with compressed RTF) and winmail.dat
 > (TNEF) are supported. `.msg` has been checked on a real Outlook message; TNEF only on samples built from the
 > specification.
 

@@ -12,7 +12,7 @@ Module path: `github.com/nlink-jp/mailparse`. Design authority:
 [docs/ja/mailparse-rfp.ja.md](docs/ja/mailparse-rfp.ja.md) (English beside it); the comparison with the three
 existing util-series parsers and the measured defects: [docs/ja/mailparse-phase0.ja.md](docs/ja/mailparse-phase0.ja.md).
 
-**Status: v0.3.0. The API is v0.x until its consumers (the four util-series mail tools) settle it.**
+**Status: v0.3.1. The API is v0.x until its consumers (the four util-series mail tools) settle it.**
 
 ## Build / test
 
@@ -23,7 +23,7 @@ make lint    # golangci-lint — before every commit
 make fuzz    # FUZZTIME=60s by default
 ```
 
-Go 1.25+. Dependencies: `golang.org/x/text`, `golang.org/x/net/html` (Go team; owner-approved exceptions).
+Go 1.26+. Dependencies: `golang.org/x/text`, `golang.org/x/net/html` (Go team; owner-approved exceptions).
 
 ## Layout
 
